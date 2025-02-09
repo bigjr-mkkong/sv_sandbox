@@ -7,6 +7,8 @@ VERILOG_SOURCES = \
     rtl/blinky.sv
 
 export PYTHON_BIN = python3
+export PYTHONPATH := $(shell pwd):$(PYTHONPATH)
+
 # Include path
 INCLUDES = third_party/basejump_stl/bsg_misc
 
@@ -14,7 +16,7 @@ INCLUDES = third_party/basejump_stl/bsg_misc
 TOPLEVEL = blinky
 
 # Cocotb testbench module (Python test file without .py)
-MODULE = dv.cocotb_bench.blinky_tb0
+MODULE = dv.cocotb_benches.blinky_tb0
 
 # Simulator (choose between icarus, verilator, questa, etc.)
 SIM = icarus  # Change to your preferred simulator
