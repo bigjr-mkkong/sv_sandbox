@@ -1,5 +1,4 @@
-
-TOP := blinky_tb
+TOP := blinky
 
 export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
 export YOSYS_DATDIR := $(shell yosys-config --datdir)
@@ -14,10 +13,24 @@ SV2V_ARGS := $(shell \
  python3 misc/convert_filelist.py sv2v rtl/rtl.f \
 )
 
+INCLUDES := $(shell grep '^-I' rtl/rtl.f)
+COCOTB_BENCHES += dv.cocotb_benches.blinky_tb0
+
 .PHONY: lint sim gls icestorm_icebreaker_gls icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
 	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only --top blinky
+
+cocotb:
+	@echo "RTLs:" "$(RTL)"
+	@echo "INCLUDEs:" "$(INCLUDES)"
+	@echo "TOPLEVEL:" $(TOP)
+	@echo "COCOTB BENCHES:" "$(COCOTB_BENCHES)"
+	@make -f Makefile.cocotb \
+		VERILOG_SOURCES="$(RTL)" \
+		INCLUDES="$(INCLUDES)" \
+		TOPLEVEL=$(TOP) \
+		MODULE="$(COCOTB_BENCHES)"
 
 sim:
 	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.f -f dv/pre_synth.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
@@ -79,4 +92,6 @@ clean:
 	 synth/build \
 	 synth/yosys_generic/build \
 	 synth/icestorm_icebreaker/build \
-	 synth/vivado_basys3/build
+	 synth/vivado_basys3/build \
+	 sim_build \
+	 results.xml
