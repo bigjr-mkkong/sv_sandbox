@@ -1,0 +1,27 @@
+# Cocotb Makefile
+
+# RTL sources
+VERILOG_SOURCES = \
+    third_party/basejump_stl/bsg_misc/bsg_counter_up_down.sv \
+    rtl/config_pkg.sv \
+    rtl/blinky.sv
+
+export PYTHON_BIN = python3
+# Include path
+INCLUDES = third_party/basejump_stl/bsg_misc
+
+# Top-level module for simulation
+TOPLEVEL = blinky
+
+# Cocotb testbench module (Python test file without .py)
+MODULE = dv.cocotb_bench.blinky_tb0
+
+# Simulator (choose between icarus, verilator, questa, etc.)
+SIM = icarus  # Change to your preferred simulator
+
+# Extra flags for the simulator
+COMPILE_ARGS += "-I$(INCLUDES)"
+
+# Cocotb default makefile
+include $(shell cocotb-config --makefiles)/Makefile.sim
+
