@@ -13,12 +13,11 @@ async def clk_gen(dut):
 async def tb_0(dut):
     cocotb.start_soon(clk_gen(dut))
 
-    dut.rst_ni.value = 1
-    await RisingEdge(dut.clk_i)
     dut.rst_ni.value = 0
+    await RisingEdge(dut.clk_i)
+    dut.rst_ni.value = 1
 
-    for _ in range(10):
+    for _ in range(40):
         await RisingEdge(dut.clk_i)
-        print(f"Blinky core out: {dut.led_o.value} at time: {sim_clk}")
 
 

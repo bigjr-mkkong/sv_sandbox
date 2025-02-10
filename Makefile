@@ -1,4 +1,4 @@
-TOP := blinky
+TOP := top_module
 
 export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
 export YOSYS_DATDIR := $(shell yosys-config --datdir)
@@ -14,12 +14,12 @@ SV2V_ARGS := $(shell \
 )
 
 INCLUDES := $(shell grep '^-I' rtl/rtl.f)
-COCOTB_BENCHES += dv.cocotb_benches.blinky_tb0
+COCOTB_BENCHES += dv.cocotb_benches.topmod_tb0
 
 .PHONY: lint sim gls icestorm_icebreaker_gls icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
-	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only --top blinky
+	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only --top ${TOP}
 
 cocotb:
 	@echo "RTLs:" "$(RTL)"
