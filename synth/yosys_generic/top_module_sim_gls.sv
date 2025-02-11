@@ -1,12 +1,12 @@
 
-module blinky_sim (
+module top_module_sim_gls (
     input  logic clk_i,
     input  logic rst_ni,
     output logic led_o
 );
 
-blinky #(
-    .ResetValue(100)
-) blinky (.*);
+top_module #(
+    .clk_frac_rate(5)
+) top_module (.*);
 
 endmodule

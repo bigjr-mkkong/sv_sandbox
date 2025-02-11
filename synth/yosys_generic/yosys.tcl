@@ -2,7 +2,7 @@
 yosys -import
 
 read_verilog synth/build/rtl.sv2v.v
-read_verilog -sv synth/yosys_generic/blinky_sim.sv
+read_verilog -sv synth/yosys_generic/top_module_sim_gls.sv
 
 prep
 opt -full

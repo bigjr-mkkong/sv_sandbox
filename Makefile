@@ -16,12 +16,14 @@ SV2V_ARGS := $(shell \
 INCLUDES := $(shell grep '^-I' rtl/rtl.f)
 COCOTB_BENCHES += dv.cocotb_benches.topmod_tb0
 
+GLS_RTL := $(shell cat synth/yosys_generic/gls.f | grep -v '^//' )
+GLS_TOP := top_module_sim_gls
 .PHONY: lint sim gls icestorm_icebreaker_gls icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
 	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only --top ${TOP}
 
-cocotb:
+sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
 	@echo "INCLUDEs:" "$(INCLUDES)"
 	@echo "TOPLEVEL:" $(TOP)
@@ -43,6 +45,13 @@ synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.f
 gls: synth/yosys_generic/build/synth.v
 	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/yosys_generic/gls.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
+
+gls-cocotb: synth/yosys_generic/build/synth.v
+	@echo "Files 2B check: " "$(GLS_RTL)"
+	@make -f Makefile.cocotb \
+		VERILOG_SOURCES="$(GLS_RTL)" \
+		TOPLEVEL=$(GLS_TOP) \
+		MODULE="$(COCOTB_BENCHES)"
 
 synth/yosys_generic/build/synth.v: synth/build/rtl.sv2v.v synth/yosys_generic/yosys.tcl
 	mkdir -p $(dir $@)
