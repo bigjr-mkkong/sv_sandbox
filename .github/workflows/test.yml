@@ -17,8 +17,8 @@ jobs:
           echo "$GITHUB_WORKSPACE/zachjs-sv2v" >> $GITHUB_PATH
 
       - run: make lint
-      - run: make sim
-      - run: make gls
-      - run: make icestorm_icebreaker_gls
+      - run: make sim-cocotb
+      - run: make gls-cocotb
+      - run: make icestorm_icebreaker_gls-cocotb
 
       - run: make clean
