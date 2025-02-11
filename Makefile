@@ -18,7 +18,14 @@ COCOTB_BENCHES += dv.cocotb_benches.topmod_tb0
 
 GLS_RTL := $(shell cat synth/yosys_generic/gls.f | grep -v '^//' )
 GLS_TOP := top_module_sim_gls
-.PHONY: lint sim gls icestorm_icebreaker_gls icestorm_icebreaker_program icestorm_icebreaker_flash clean
+GLS_EXT_ARGS := $(shell cat synth/yosys_generic/gls.f | grep '^-')
+
+ICE_RTL := $(shell cat synth/icestorm_icebreaker/gls.f | grep -Ev '^(//|-)')
+ICE_EXT_ARGS := $(shell cat synth/icestorm_icebreaker/gls.f | grep '^-')
+ICE_TOP := icebreaker
+ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
+
+.PHONY: lint sim-cocotb gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
 	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only --top ${TOP}
@@ -47,10 +54,11 @@ gls: synth/yosys_generic/build/synth.v
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
 
 gls-cocotb: synth/yosys_generic/build/synth.v
-	@echo "Files 2B check: " "$(GLS_RTL)"
+	@echo "Files 2 check: " "$(GLS_RTL)"
 	@make -f Makefile.cocotb \
 		VERILOG_SOURCES="$(GLS_RTL)" \
 		TOPLEVEL=$(GLS_TOP) \
+		EXTRA_ARGS="$(GLS_EXTRA_ARGS)" \
 		MODULE="$(COCOTB_BENCHES)"
 
 synth/yosys_generic/build/synth.v: synth/build/rtl.sv2v.v synth/yosys_generic/yosys.tcl
@@ -60,6 +68,17 @@ synth/yosys_generic/build/synth.v: synth/build/rtl.sv2v.v synth/yosys_generic/yo
 icestorm_icebreaker_gls: synth/icestorm_icebreaker/build/synth.v
 	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/icestorm_icebreaker/gls.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
+
+
+icestorm_icebreaker_gls-cocotb: synth/icestorm_icebreaker/build/synth.v
+	@echo "Files 2 check: " "$(ICE_RTL)"
+	@echo "Top Module: " "$(ICE_TOP)"
+	@echo "Extra Args: " "$(ICE_EXT_ARGS)"
+	@make -f Makefile.cocotb \
+		VERILOG_SOURCES="$(ICE_RTL)" \
+		TOPLEVEL=$(ICE_TOP) \
+		EXTRA_ARGS="$(ICE_EXT_ARGS)" \
+		MODULE="$(ICE_COCOTB_BENCHES)"
 
 synth/icestorm_icebreaker/build/synth.v synth/icestorm_icebreaker/build/synth.json: synth/build/rtl.sv2v.v synth/icestorm_icebreaker/icebreaker.v synth/icestorm_icebreaker/yosys.tcl
 	mkdir -p $(dir $@)

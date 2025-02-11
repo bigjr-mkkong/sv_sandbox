@@ -26,9 +26,9 @@ SB_PLL40_PAD #(
     .PLLOUTGLOBAL(clk_50)
 );
 
-blinky #(
-    .ResetValue(5000000)
-) blinky (
+top_module #(
+    .clk_frac_rate(5)
+) icebreaker_top_module (
     .clk_i(clk_50),
     .rst_ni(BTN_N),
     .led_o(led)
