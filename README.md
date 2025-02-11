@@ -1,7 +1,7 @@
 
-# Blinky SystemVerilog Template
+# SystemVerilog Template
 
-This project demonstrates a scalable SystemVerilog project template. It implements an overengineered "blinky" example working on multiple synthesis and simulation targets.
+This project demonstrates a scalable SystemVerilog project template. It implements an overengineered clock frequency divisor example working on multiple synthesis and simulation targets.
 
 ## Dependencies
 
@@ -15,13 +15,13 @@ This project demonstrates a scalable SystemVerilog project template. It implemen
 git submodule update --init --recursive
 
 # simulate with Verilator
-make sim
+make sim-cocotb
 
 # generic synthesis with Yosys, then simulate with Verilator
-make gls
+make gls-cocotb
 
 # Icebreaker synthesis with Yosys/Icestorm, then simulate with Verilator
-make icestorm_icebreaker_gls
+make icestorm_icebreaker_gls-cocotb
 # program Icebreaker volatile memory
 make icestorm_icebreaker_program
 # program Icebreaker non-volatile memory
@@ -35,6 +35,8 @@ make icestorm_icebreaker_flash
 GitHub actions are set up to download the latest open-source tools and run all Makefile commands.
 
 ### [`"dv"`](./dv) Design Verification
+> [!WARNING]
+> This branch use cocotb as test case for all target, it's inside `dv/cocotb_benches`
 
 The `"dv"` directory holds all testbenches and generic non-synthesizable code.
 
