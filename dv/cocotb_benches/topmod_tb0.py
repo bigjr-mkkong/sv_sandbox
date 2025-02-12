@@ -9,6 +9,8 @@ async def clk_gen(dut):
         dut.clk_i.value = 1
         await Timer(2, units="ns")
 
+    cocotb.finish()
+
 @cocotb.test()
 async def tb_0(dut):
     cocotb.start_soon(clk_gen(dut))
@@ -23,7 +25,7 @@ async def tb_0(dut):
     await RisingEdge(dut.req_rdy_o)
 
     dut.req_val_i.value = 0
-    dut.rsp_rdy_i = 1
+    dut.rsp_rdy_i.value = 1
     rsp_data = dut.data_o.value
     await RisingEdge(dut.rsp_val_o)
 

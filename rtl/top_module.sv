@@ -66,8 +66,8 @@ module fifo_test#(
     logic [DATA_WIDTH-1: 0]data_buf;
 
     typedef enum logic[1:0] {
-        INIT = 2'd1,
-        REPLY = 2'd2
+        INIT = 2'd0,
+        REPLY = 2'd1
     } state_t;
 
     state_t state_d, state_q;
