@@ -64,6 +64,8 @@ module fifo_test#(
     logic [ADDR_WIDTH-1: 0] mem_w_addr;
     logic [1:0]req_typ_buf;
     logic [DATA_WIDTH-1: 0]data_buf;
+    logic [DATA_WIDTH-1: 0]elecnt_d;
+    logic [DATA_WIDTH-1: 0]elecnt_q;
 
     typedef enum logic[1:0] {
         INIT = 2'd0,
@@ -78,6 +80,7 @@ module fifo_test#(
         mem_w_addr = 0;
         req_rdy_o = 0;
         rsp_val_o = 0;
+        elecnt_d = 0;
         case (state_q)
             INIT:
             begin
@@ -100,6 +103,7 @@ module fifo_test#(
                             //pop
                             data_o = mem[read_ptr_q];
                             read_ptr_d = (read_ptr_q + 1);
+                            elecnt_d = -1;
                         end
 
                         2'd2:
@@ -108,6 +112,12 @@ module fifo_test#(
                             mem_write = 1;
                             mem_w_addr = write_ptr_q;
                             write_ptr_d = (write_ptr_q + 1);
+                            elecnt_d = 1;
+                        end
+
+                        2'd3:
+                        begin
+                            data_o = elecnt_q;
                         end
 
                         default:
@@ -130,6 +140,7 @@ module fifo_test#(
             state_q <= INIT;
             write_ptr_q <= 0;
             read_ptr_q <= 0;
+            elecnt_q <= 0;
         end else begin
             state_q <= state_d;
             write_ptr_q <= write_ptr_d;
@@ -137,6 +148,7 @@ module fifo_test#(
             req_typ_buf <= save_req?req_typ_i:req_typ_buf;
             data_buf <= save_req?data_i:data_buf;
             mem[mem_w_addr] <= mem_write?data_buf:mem[mem_w_addr];
+            elecnt_q <= elecnt_q + elecnt_d;
         end
     end
 
