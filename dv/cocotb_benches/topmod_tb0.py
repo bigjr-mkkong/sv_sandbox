@@ -20,14 +20,45 @@ async def tb_0(dut):
         await RisingEdge(dut.clk_i)
     dut.rst_ni.value = 1
     dut.req_val_i.value = 1
-    dut.req_typ_i.value = 1
+    dut.req_typ_i.value = 2
     dut.data_i.value = 4
     await RisingEdge(dut.req_rdy_o)
 
-    dut.req_val_i.value = 0
     dut.rsp_rdy_i.value = 1
-    rsp_data = dut.data_o.value
     await RisingEdge(dut.rsp_val_o)
+
+    dut.req_val_i.value = 1
+    dut.req_typ_i.value = 2
+    dut.data_i.value = 5
+    await RisingEdge(dut.req_rdy_o)
+
+    dut.rsp_rdy_i.value = 1
+    await RisingEdge(dut.rsp_val_o)
+
+    dut.req_val_i.value = 0
+
+    for _ in range(5):
+        await RisingEdge(dut.clk_i)
+
+    dut.req_val_i.value = 1
+    dut.req_typ_i.value = 1
+    await RisingEdge(dut.req_rdy_o)
+
+    dut.rsp_rdy_i.value = 1
+    await RisingEdge(dut.rsp_val_o)
+    rsp_data = dut.data_o.value
+
+    assert rsp_data == 4
+
+    dut.req_val_i.value = 1
+    dut.req_typ_i.value = 1
+    await RisingEdge(dut.req_rdy_o)
+
+    dut.rsp_rdy_i.value = 1
+    await RisingEdge(dut.rsp_val_o)
+    rsp_data = dut.data_o.value
+
+    assert rsp_data == 5
 
     for _ in range(40):
         await RisingEdge(dut.clk_i)

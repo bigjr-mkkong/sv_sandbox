@@ -76,6 +76,8 @@ module fifo_test#(
         save_req = 0;
         mem_write = 0;
         mem_w_addr = 0;
+        req_rdy_o = 0;
+        rsp_val_o = 0;
         case (state_q)
             INIT:
             begin
@@ -95,17 +97,17 @@ module fifo_test#(
                     case (req_typ_buf)
                         2'd1:
                         begin
-                            //read
+                            //pop
                             data_o = mem[read_ptr_q];
-                            read_ptr_d = (read_ptr_q + 1) % MAX_CAPACITY;
+                            read_ptr_d = (read_ptr_q + 1);
                         end
 
                         2'd2:
                         begin
-                            //write
+                            //push
                             mem_write = 1;
                             mem_w_addr = write_ptr_q;
-                            write_ptr_d = (write_ptr_q + 1) % MAX_CAPACITY;
+                            write_ptr_d = (write_ptr_q + 1);
                         end
 
                         default:
