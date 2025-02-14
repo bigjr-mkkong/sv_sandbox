@@ -1,7 +1,7 @@
 
 module top_module#(
     parameter DATA_WIDTH = 32,
-    parameter MAX_CAPACITY = 20
+    parameter MAX_CAPACITY = 2 ** 4
     ) (
     input logic clk_i,
     input logic rst_ni,
@@ -29,6 +29,7 @@ fifo_test#(
 
 		.rsp_val_o (rsp_val_o),
 		.data_o (data_o),
+        .err_o (_),
 		.rsp_rdy_i (rsp_rdy_i)
     );
 
@@ -49,6 +50,7 @@ module fifo_test#(
 
     output logic rsp_val_o,
     output logic [DATA_WIDTH-1: 0]data_o,
+    output logic err_o,
     input logic rsp_rdy_i
     );
 
@@ -66,6 +68,7 @@ module fifo_test#(
     logic [DATA_WIDTH-1: 0]data_buf;
     logic [DATA_WIDTH-1: 0]elecnt_d;
     logic [DATA_WIDTH-1: 0]elecnt_q;
+    logic error_code;
 
     typedef enum logic[1:0] {
         INIT = 2'd0,
@@ -74,6 +77,8 @@ module fifo_test#(
 
     state_t state_d, state_q;
 
+    assign err_o = error_code;
+
     always_comb begin
         save_req = 0;
         mem_write = 0;
@@ -81,6 +86,7 @@ module fifo_test#(
         req_rdy_o = 0;
         rsp_val_o = 0;
         elecnt_d = 0;
+        error_code = 0;
         case (state_q)
             INIT:
             begin
@@ -121,7 +127,7 @@ module fifo_test#(
                         end
 
                         default:
-                            $fatal("Unexpected req_typ value: %d", req_typ_buf);
+                            error_code = 1;
                     endcase
                     state_d = INIT;
                 end else begin
@@ -130,7 +136,7 @@ module fifo_test#(
             end
 
             default:
-                $fatal("Unexpected state value: %d", state_q);
+                error_code = 1;
 
         endcase
     end
