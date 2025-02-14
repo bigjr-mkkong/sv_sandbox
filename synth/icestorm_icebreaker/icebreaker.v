@@ -12,6 +12,20 @@ wire led;
 assign LEDG_N = !led;
 
 // icepll -i 12 -o 50
+// F_PLLIN:    12.000 MHz (given)
+// F_PLLOUT:   50.000 MHz (requested)
+// F_PLLOUT:   50.250 MHz (achieved)
+
+// FEEDBACK: SIMPLE
+// F_PFD:   12.000 MHz
+// F_VCO:  804.000 MHz
+
+// DIVR:  0 (4'b0000)
+// DIVF: 66 (7'b1000010)
+// DIVQ:  4 (3'b100)
+
+// FILTER_RANGE: 1 (3'b001)
+
 SB_PLL40_PAD #(
     .FEEDBACK_PATH("SIMPLE"),
     .DIVR(4'd0),
