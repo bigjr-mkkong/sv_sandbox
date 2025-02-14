@@ -1,15 +1,11 @@
-
 module icebreaker (
     input  wire CLK,
-    input  wire BTN_N,
-    output wire LEDG_N
+    input  wire RX,
+    output wire TX
 );
 
 wire clk_12 = CLK;
 wire clk_50;
-
-wire led;
-assign LEDG_N = !led;
 
 // icepll -i 12 -o 50
 // F_PLLIN:    12.000 MHz (given)
