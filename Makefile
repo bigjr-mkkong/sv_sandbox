@@ -28,7 +28,7 @@ ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
 .PHONY: lint sim-cocotb gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
-	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only --top ${TOP}
+	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only -Wall --top ${TOP}
 
 sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
