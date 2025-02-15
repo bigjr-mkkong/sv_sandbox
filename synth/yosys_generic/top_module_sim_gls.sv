@@ -1,12 +1,14 @@
 
 module top_module_sim_gls (
-    input  logic clk_i,
-    input  logic rst_ni,
-    output logic led_o
+    input   logic clk_i,
+    input   logic button_i,
+    output  logic led_o
 );
 
-top_module #(
-    .clk_frac_rate(5)
-) top_module (.*);
+top_module  top_module (
+    .clk_i(clk_i),
+    .button_i(button_i),
+    .led_o(led_o),
+);
 
 endmodule

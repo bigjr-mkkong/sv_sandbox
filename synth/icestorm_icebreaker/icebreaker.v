@@ -1,15 +1,26 @@
-
 module icebreaker (
     input  wire CLK,
-    input  wire BTN_N,
-    output wire LEDG_N
+    input  wire BTN1,
+    output wire LED1,
+    output wire LED2,
+    output wire LED3,
+    output wire LED4,
+    output wire LED5,
 );
 
 wire clk_12 = CLK;
 wire clk_50;
 
 wire led;
-assign LEDG_N = !led;
+wire button;
+
+assign button = BTN1;
+assign LED1 = led;
+assign LED2 = led;
+assign LED3 = led;
+assign LED4 = led;
+assign LED5 = led;
+
 
 // icepll -i 12 -o 50
 // F_PLLIN:    12.000 MHz (given)
@@ -40,12 +51,10 @@ SB_PLL40_PAD #(
     .PLLOUTGLOBAL(clk_50)
 );
 
-top_module #(
-    .clk_frac_rate(5)
-) icebreaker_top_module (
-    .clk_i(clk_50),
-    .rst_ni(BTN_N),
-    .led_o(led)
-);
 
+top_module  top_module (
+    .clk_i(clk_50),
+    .button_i(button),
+    .led_o(led),
+);
 endmodule
