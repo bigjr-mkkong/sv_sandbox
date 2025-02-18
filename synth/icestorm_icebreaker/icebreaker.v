@@ -1,5 +1,6 @@
 module icebreaker (
     input  wire CLK,
+    input  wire BTN_N,
     input  wire RX,
     output wire TX
 );
@@ -36,12 +37,14 @@ SB_PLL40_PAD #(
     .PLLOUTGLOBAL(clk_50)
 );
 
-top_module #(
-    .clk_frac_rate(5)
-) icebreaker_top_module (
-    .clk_i(clk_50),
-    .rst_ni(BTN_N),
-    .led_o(led)
-);
+
+
+// top_module #(
+//     .clk_frac_rate(5)
+// ) icebreaker_top_module (
+//     .clk_i(clk_50),
+//     .rst_ni(BTN_N),
+//     .led_o(led)
+// );
 
 endmodule

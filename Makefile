@@ -83,7 +83,7 @@ icestorm_icebreaker_gls-cocotb: synth/icestorm_icebreaker/build/synth.v
 	@make -f Makefile.cocotb \
 		VERILOG_SOURCES="$(ICE_RTL)" \
 		TOPLEVEL=$(ICE_TOP) \
-		EXTRA_ARGS="$(ICE_EXT_ARGS)" \
+		EXTRA_ARGS="$(ICE_EXT_ARGS) --trace" \
 		MODULE="$(ICE_COCOTB_BENCHES)"
 
 synth/icestorm_icebreaker/build/synth.v synth/icestorm_icebreaker/build/synth.json: synth/build/rtl.sv2v.v synth/icestorm_icebreaker/icebreaker.v synth/icestorm_icebreaker/yosys.tcl
