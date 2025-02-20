@@ -1,4 +1,3 @@
-
 module top_module#(
     parameter UART_DATA_WIDTH = 8
     ) (
