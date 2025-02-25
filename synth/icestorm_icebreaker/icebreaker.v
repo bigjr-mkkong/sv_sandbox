@@ -1,9 +1,10 @@
-module icebreaker (
+module icebreaker#(
+    parameter UART_DATA_WIDTH = 8
+) (
     input  wire CLK,
     input  wire BTN_N,
     input  wire RX,
-    output wire TX,
-    output wire LEDG_N
+    output wire TX
 );
 
 wire clk_12 = CLK;
@@ -38,24 +39,24 @@ SB_PLL40_PAD #(
     .PLLOUTGLOBAL(clk_50250)
 );
 
-    reg [31:0] counter = 0;
-    reg start = 0;
-    wire busy;
-    wire tx_out;
-
+    reg [UART_DATA_WIDTH-1: 0]uart_buf_o;
+    wire uart_rsp_rdy_i;
+    wire uart_rsp_val_o;
     uart_tx uart (
         .clk(clk_50250),
         .rst_n(BTN_N),
-        .data_val_i(1),
-        .data_in(8'h48),
-        .data_rdy_o(_),
+        .data_val_i(uart_rsp_val_o),
+        .data_in(uart_buf_o),
+        .data_rdy_o(uart_rsp_rdy_i),
         .tx(TX)
     );
 
-    top_module dut(
-    
-    )
+    top_module dut (
+    .clk_i(clk_50250),
+    .rst_ni(BTN_N),
+    .uart_rsp_rdy_i(uart_rsp_rdy_i),
+    .uart_rsp_data_o(uart_buf_o),
+    .uart_rsp_val_o(uart_rsp_val_o)
+);
+
 endmodule
-
-
-
