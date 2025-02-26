@@ -1,6 +1,6 @@
 import serial
 
-ser = serial.Serial('/dev/ttyUSB4', 115200, timeout=1)
+ser = serial.Serial('/dev/ttyUSB1', 115200, timeout=1)
 
 while True:
     data = ser.read(1)

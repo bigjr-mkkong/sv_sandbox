@@ -22,7 +22,7 @@ module top_module#(
         send_out = 0;
         if (uart_rsp_rdy_i) begin
             send_out = uart_buf_q;
-            uart_buf_d = uart_buf_q > 8'h5a ? 8'h31 : uart_buf_q + 1;
+            uart_buf_d = uart_buf_q > 8'h59 ? 8'h31 : uart_buf_q + 1;
             uart_rsp_val_o = 1;
         end else begin
             uart_buf_d = uart_buf_q;
