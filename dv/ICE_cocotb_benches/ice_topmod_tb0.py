@@ -5,9 +5,9 @@ sim_clk = 0
 async def clk_gen(dut):
     for sim_clk in range(1000):
         dut.CLK.value = 0
-        await Timer(2, units="ns")
+        await Timer(2, unit="ns")
         dut.CLK.value = 1
-        await Timer(2, units="ns")
+        await Timer(2, unit="ns")
 
 @cocotb.test()
 async def tb_0(dut):

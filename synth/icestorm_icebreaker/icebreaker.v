@@ -1,26 +1,14 @@
-module icebreaker (
+module icebreaker#(
+    parameter UART_DATA_WIDTH = 8
+) (
     input  wire CLK,
-    input  wire BTN1,
-    output wire LED1,
-    output wire LED2,
-    output wire LED3,
-    output wire LED4,
-    output wire LED5,
+    input  wire BTN_N,
+    input  wire RX,
+    output wire TX
 );
 
 wire clk_12 = CLK;
-wire clk_50;
-
-wire led;
-wire button;
-
-assign button = BTN1;
-assign LED1 = led;
-assign LED2 = led;
-assign LED3 = led;
-assign LED4 = led;
-assign LED5 = led;
-
+wire clk_50250;
 
 // icepll -i 12 -o 50
 // F_PLLIN:    12.000 MHz (given)
@@ -39,22 +27,36 @@ assign LED5 = led;
 
 SB_PLL40_PAD #(
     .FEEDBACK_PATH("SIMPLE"),
-    .DIVR(4'd0),
-    .DIVF(7'd66),
-    .DIVQ(3'd4),
-    .FILTER_RANGE(3'd1)
+    .DIVR(4'b0000),
+    .DIVF(7'b1000010),
+    .DIVQ(3'b100),
+    .FILTER_RANGE(3'b001)
 ) pll (
     .LOCK(),
     .RESETB(1'b1),
     .BYPASS(1'b0),
     .PACKAGEPIN(clk_12),
-    .PLLOUTGLOBAL(clk_50)
+    .PLLOUTGLOBAL(clk_50250)
 );
 
+    reg [UART_DATA_WIDTH-1: 0]uart_buf_o;
+    wire uart_rsp_rdy_i;
+    wire uart_rsp_val_o;
+    uart_tx uart (
+        .clk(clk_50250),
+        .rst_n(BTN_N),
+        .data_val_i(uart_rsp_val_o),
+        .data_in(uart_buf_o),
+        .data_rdy_o(uart_rsp_rdy_i),
+        .tx(TX)
+    );
 
-top_module  top_module (
-    .clk_i(clk_50),
-    .button_i(button),
-    .led_o(led),
-);
+    top_module dut (
+        .clk_i(clk_50250),
+        .rst_ni(BTN_N),
+        .uart_rsp_rdy_i(uart_rsp_rdy_i),
+        .uart_rsp_data_o(uart_buf_o),
+        .uart_rsp_val_o(uart_rsp_val_o)
+    );
+
 endmodule
