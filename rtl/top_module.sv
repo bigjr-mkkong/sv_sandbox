@@ -1,40 +1,38 @@
 module top_module#(
-    parameter UART_DATA_WIDTH = 8
+    parameter DATA_BITS = 32,
+    localparam DATA_WIDTH = $clog2(DATA_BITS),
+    parameter MEM_SIZE = 2**7,
+    localparam ADDR_WIDTH = $clog2(MEM_SIZE)
     ) (
     input   logic clk_i,
     input   logic rst_ni,
 
-    input   logic uart_rsp_rdy_i,
-    output  logic [UART_DATA_WIDTH-1: 0] uart_rsp_data_o,
-    output  logic uart_rsp_val_o
+    input logic req_val_i,
+    input logic req_typ_i, //0 is read, 1 is write
+    input logic [ADDR_WIDTH-1: 0]req_addr_i,
+    input logic [DATA_WIDTH-1: 0]req_data_i,
+    output logic req_rdy_o,
+
+    output logic rsp_val_o,
+    output logic [DATA_WIDTH-1: 0]rsp_data_o,
+    input logic rsp_rdy_i
 );
 
+mem #(
+    .DATA_BITS(DATA_BITS),
+    .MEM_SIZE(MEM_SIZE)
+    )memblk(
+		.clk_i(clk_i),
+		.rst_ni(rst_ni),
+		.req_val_i(req_val_i),
+        .req_typ_i(req_typ_i),
+		.req_addr_i(req_addr_i),
+		.req_data_i(req_data_i),
+		.req_rdy_o(req_rdy_o),
 
-    logic [UART_DATA_WIDTH-1: 0]uart_buf_q;
-    logic [UART_DATA_WIDTH-1: 0]uart_buf_d;
-    
-    logic [UART_DATA_WIDTH-1: 0]send_out;
-
-    assign uart_rsp_data_o = send_out;
-
-    always_comb begin
-        uart_rsp_val_o = 0;
-        send_out = 0;
-        if (uart_rsp_rdy_i) begin
-            send_out = uart_buf_q;
-            uart_buf_d = uart_buf_q > 8'h59 ? 8'h31 : uart_buf_q + 1;
-            uart_rsp_val_o = 1;
-        end else begin
-            uart_buf_d = uart_buf_q;
-        end
-    end
-        
-    always @(posedge clk_i) begin
-        if (~rst_ni) begin
-            uart_buf_q <= 8'h31;
-        end else begin
-            uart_buf_q <= uart_buf_d;
-        end
-    end
+		.rsp_val_o(rsp_val_o),
+		.rsp_data_o(rsp_data_o),
+		.rsp_rdy_i(rsp_rdy_i)
+    );
 
 endmodule
