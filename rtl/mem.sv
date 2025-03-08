@@ -67,6 +67,7 @@ module mem #(
 
                 1'b1: begin
                     mem_d[in2rs_req_addr_q] = in2rs_req_data_q;
+                    rsp_data_tmp = in2rs_req_data_q; //Just for test reason, need to remove later
                 end
             endcase
         end
@@ -88,7 +89,6 @@ module mem #(
             mem_q[in2rs_req_addr_q] <= 0;
         end else begin
             mem_q[in2rs_req_addr_q] <= mem_d[in2rs_req_addr_q];
-            $display("Written mem[0x%x] = 0x%x", in2rs_req_addr_q, mem_d[in2rs_req_addr_q]);
         end
     end
 
