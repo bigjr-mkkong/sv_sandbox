@@ -5,3 +5,5 @@ ${BASEJUMP_STL_DIR}/bsg_misc/bsg_counter_up_down.sv
 rtl/config_pkg.sv
 
 rtl/top_module.sv
+rtl/round.sv
+rtl/sbox.sv
