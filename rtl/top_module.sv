@@ -7,14 +7,6 @@ module top_module#(
     input   logic clk_i,
     input   logic rst_ni,
 
-    // input   logic req_val_i,
-    // input   logic [DATAW-1: 0] ptext_i,
-    // input   logic [DATAW-1: 0] key_i,
-    // input   logic req_rdy_o,
-
-    // output  logic rsp_val_o,
-    // output  logic [DATAW-1: 0] cipher_o,
-    // input   logic rsp_rdy_i
     input   logic [DATAW-1:0] ptext_i,
     input   logic [DATAW-1:0] key_i,
     output  logic [DATAW-1:0] cipher_o
@@ -36,6 +28,7 @@ module top_module#(
             cipher_o <= cipher_buf;
         end
     end
+    
 
 endmodule
 

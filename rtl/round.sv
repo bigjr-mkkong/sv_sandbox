@@ -13,7 +13,7 @@ module round#(
 
     assign cipher_o = mix_o;
 
-    add_round_key step_round(
+    add_round_key step_addrdkey(
         .ptext_i    (ptext_i),
         .key_i      (key_i),
         .mixed_o    (addrdkey_o)
