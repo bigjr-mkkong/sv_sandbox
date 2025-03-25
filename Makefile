@@ -79,4 +79,5 @@ clean:
 	 synth/build \
 	 synth/yosys_generic/build \
 	 synth/icestorm_icebreaker/build \
-	 synth/vivado_basys3/build
+	 synth/vivado_basys3/build \
+	__pycache__/
