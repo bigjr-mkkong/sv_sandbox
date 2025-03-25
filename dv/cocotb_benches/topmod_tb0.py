@@ -1,8 +1,9 @@
 import cocotb;
 from cocotb.clock import Clock
 from cocotb.triggers import Timer, RisingEdge, FallingEdge
+from colorama import Fore
 
-from aes_enc import one_round_aes
+from present import enc
 
 @cocotb.test()
 async def tb_0(dut):
@@ -14,14 +15,17 @@ async def tb_0(dut):
 
     dut.rst_ni.value = 1
 
-    key = 12345
-    for i in range(10):
-        dut.ptext_i.value = i
+    key = 1234
+
+    for p in range(65536):
+        dut.ptext_i.value = p
         dut.key_i.value = key
         await RisingEdge(dut.clk_i)
-        dut_ans = int(dut.cipher_o.value)
-        rel_ans = one_round_aes(i, key)
-        print(i,dut_ans,rel_ans)
+        await RisingEdge(dut.clk_i)
+        cip2 = dut.cipher_o.value
+        cip1 = enc(p, key)
+
+        assert cip2 == cip1
 
     for _ in range(10):
         await RisingEdge(dut.clk_i)

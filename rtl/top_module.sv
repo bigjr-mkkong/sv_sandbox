@@ -2,7 +2,7 @@
 //Only go through addkey->sbox->permu
 
 module top_module#(
-    parameter DATAW = 16
+    parameter DATAW = 32
     ) (
     input   logic clk_i,
     input   logic rst_ni,

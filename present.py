@@ -37,7 +37,7 @@ inv_sbox = [sbox.index(i) for i in range(len(sbox))]
 pbox = [ 8, 29, 23, 15,  5,  6, 21, 18, 19, 22, 17, 25, 14,  0, 31, 10, 30, 24,  7, 16,  3,  9, 20,  1, 13,  2, 27, 11, 28,  4, 26, 12]
 inv_pbox = [pbox.index(i) for i in range(len(pbox))]
 
-def rand_sbox_gen():
+def print_sbox():
     for i in range(0, 256):
         pad1 = ""
         if i >=0 and i <= 9:
@@ -70,7 +70,7 @@ def add_round_key(p, k):
     return p ^ k
 
 def sbox_app(m, sbox: list[int]) -> int:
-    in_list = m.to_bytes(4, byteorder='big')
+    in_list = m.to_bytes(4, byteorder='little')
     out_list = [sbox[b] for b in in_list]
     out_val = 0
     for idx, num in enumerate(out_list):
@@ -86,20 +86,23 @@ def pbox_app(m: int, pbox: list[int]) -> int:
 
 def enc(p, k):
     m1 = add_round_key(p, k)
+    # print("correct:" + hex(m1))
     m2 = sbox_app(m1, sbox)
+    # print("correct:" + hex(m2))
     m3 = pbox_app(m2, pbox)
-    m4 = add_round_key(m3, k)
-    return m4
+    # print("correct:" + hex(m3))
+    return m3
 
 def dec(p, k):
-    m1 = add_round_key(p, k)
-    m2 = pbox_app(m1, inv_pbox)
-    m3 = sbox_app(m2, inv_sbox)
-    m4 = add_round_key(m3, k)
-    return m4
+    m1 = pbox_app(p, inv_pbox)
+    m2 = sbox_app(m1, inv_sbox)
+    m3 = add_round_key(m2, k)
+    return m3
 
-k = 1234
-for p in range(65536):
-    cip = enc(p, k)
-    deci = dec(cip, k)
-    assert(deci == p)
+# k = 1234
+# for p in range(65536):
+#     cip = enc(p, k)
+#     deci = dec(cip, k)
+#     assert(deci == p)
+
+# print_sbox()

@@ -1,5 +1,5 @@
 module round#(
-    parameter DATAW = 16
+    parameter DATAW = 32
     )(
         input   logic [DATAW-1:0]ptext_i,
         input   logic [DATAW-1:0]key_i,
@@ -8,12 +8,8 @@ module round#(
 
     logic [DATAW-1:0] addrdkey_o;
     logic [DATAW-1:0] sbox_o;
-    logic [DATAW-1:0] shift_o;
-    logic [DATAW-1:0] mix_o;
 
-    assign cipher_o = mix_o;
-
-    add_round_key step_addrdkey(
+    add_round_key step_addrdkey1(
         .ptext_i    (ptext_i),
         .key_i      (key_i),
         .mixed_o    (addrdkey_o)
@@ -24,40 +20,16 @@ module round#(
         .data_o     (sbox_o)
     );
 
-    row_shift step_rshift(
+    pbox step_pbox(
         .data_i     (sbox_o),
-        .data_o     (shift_o)
+        .data_o     (cipher_o)
     );
 
-    colmix step_colmix(
-        .data_i     (shift_o),
-        .data_o     (mix_o)
-    );
 
-endmodule
-
-module row_shift#(
-    parameter DATAW = 16,
-    localparam ROWCNT = $clog2(DATAW),
-    localparam COLCNT = ROWCNT
-    )(
-    input   logic [DATAW-1:0]data_i,
-    output  logic [DATAW-1:0]data_o
-    );
-
-    logic [DATAW-1: 0] shifted;
-    integer row;
-    always_comb begin
-        shifted = data_i;
-        for (row = 0; row < ROWCNT; row++) begin
-            shifted[(row*4) +: 4] = data_i[(((row*4) + row) % (ROWCNT * COLCNT)) +: 4];
-        end
-        data_o = shifted;
-    end
 endmodule
 
 module add_round_key#(
-    parameter DATAW = 16
+    parameter DATAW = 32
     )(
         input   logic [DATAW-1: 0] ptext_i,
         input   logic [DATAW-1: 0] key_i,
@@ -66,38 +38,27 @@ module add_round_key#(
     assign mixed_o = ptext_i ^ key_i;
 endmodule
 
-module colmix#(
-    parameter DATAW = 16,
-    localparam ROWCNT = $clog2(DATAW),
-    localparam COLCNT = ROWCNT
+module pbox#(
+    parameter DATAW = 32
     )(
-        input   logic [DATAW-1:0] data_i,
-        output  logic [DATAW-1:0] data_o
+        input   logic [DATAW-1: 0]data_i,
+        output  logic [DATAW-1: 0]data_o
     );
-    logic [ROWCNT-1:0] state [COLCNT-1:0];
-    logic [ROWCNT-1:0] state_out [COLCNT-1:0];
 
-    integer row, col;
+    localparam int pbox[32] = {
+    8, 29, 23, 15, 5, 6, 21, 18,
+    19, 22, 17, 25, 14, 0, 31, 10,
+    30, 24, 7, 16, 3, 9, 20, 1,
+    13, 2, 27, 11, 28, 4, 26, 12
+    };
 
-    always_comb begin
-        for (col = 0; col < COLCNT; col++) begin
-            for (row = 0; row < ROWCNT; row++) begin
-                state[col][row] = data_i[(col * ROWCNT) + row];
-            end
+
+    
+    genvar i;
+    generate
+        for (i=0; i<DATAW; i++) begin
+            assign data_o[i] = data_i[pbox[i]];
         end
-
-        for (col = 0; col < COLCNT; col++) begin
-            state_out[col][0] = (state[col][0] << 1) ^ (state[col][1] << 1) ^ state[col][1] ^ state[col][2] ^ state[col][3];
-            state_out[col][1] = state[col][0] ^ (state[col][1] << 1) ^ (state[col][2] << 1) ^ state[col][2] ^ state[col][3];
-            state_out[col][2] = state[col][0] ^ state[col][1] ^ (state[col][2] << 1) ^ (state[col][3] << 1) ^ state[col][3];
-            state_out[col][3] = (state[col][0] << 1) ^ state[col][0] ^ state[col][1] ^ state[col][2] ^ (state[col][3] << 1);
-        end
-
-        for (col = 0; col < COLCNT; col++) begin
-            for (row = 0; row < ROWCNT; row++) begin
-                data_o[(col * ROWCNT) + row] = state_out[col][row];
-            end
-        end
-    end
+    endgenerate
 
 endmodule
