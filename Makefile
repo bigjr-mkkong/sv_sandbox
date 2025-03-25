@@ -129,4 +129,5 @@ clean:
 	 synth/icestorm_icebreaker/build \
 	 synth/vivado_basys3/build \
 	 sim_build \
-	 results.xml
+	 results.xml \
+	__pycache__/
