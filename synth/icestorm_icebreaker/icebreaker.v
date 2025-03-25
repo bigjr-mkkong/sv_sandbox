@@ -51,12 +51,12 @@ SB_PLL40_PAD #(
         .tx(TX)
     );
 
-    top_module dut (
-        .clk_i(clk_50250),
-        .rst_ni(BTN_N),
-        .uart_rsp_rdy_i(uart_rsp_rdy_i),
-        .uart_rsp_data_o(uart_buf_o),
-        .uart_rsp_val_o(uart_rsp_val_o)
-    );
+    // top_module dut (
+    //     .clk_i(clk_50250),
+    //     .rst_ni(BTN_N),
+		// .ptext_i (32'd1234),
+		// .key_i (32'd1234),
+		// .cipher_o (uart_buf_o)
+    // );
 
 endmodule
