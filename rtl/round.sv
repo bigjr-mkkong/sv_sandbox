@@ -1,4 +1,4 @@
-module round#(
+module enc_round#(
     parameter DATAW = 32
     )(
         input   logic [DATAW-1:0]ptext_i,

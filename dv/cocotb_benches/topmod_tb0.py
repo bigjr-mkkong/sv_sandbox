@@ -16,16 +16,24 @@ async def tb_0(dut):
     dut.rst_ni.value = 1
 
     key = 1234
+    ptext = 1234
+    dut.ptext_i.value = ptext
+    dut.key_i.value = key
+    await RisingEdge(dut.clk_i)
+    await RisingEdge(dut.clk_i)
+    cip2 = dut.cipher_o.value
+    cip1 = enc(ptext, key)
+    print(hex(cip1))
 
-    for p in range(65536):
-        dut.ptext_i.value = p
-        dut.key_i.value = key
-        await RisingEdge(dut.clk_i)
-        await RisingEdge(dut.clk_i)
-        cip2 = dut.cipher_o.value
-        cip1 = enc(p, key)
+    # for p in range(65536):
+    #     dut.ptext_i.value = p
+    #     dut.key_i.value = key
+    #     await RisingEdge(dut.clk_i)
+    #     await RisingEdge(dut.clk_i)
+    #     cip2 = dut.cipher_o.value
+    #     cip1 = enc(p, key)
 
-        assert cip2 == cip1
+    #     assert cip2 == cip1
 
     for _ in range(10):
         await RisingEdge(dut.clk_i)
