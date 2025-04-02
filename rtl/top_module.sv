@@ -16,61 +16,47 @@ module top_module#(
     input   logic rsp_ack_i;
 );
 
-    logic [DATAW-1:0] c0_cip_buf;
-    logic [DATAW-1:0] c1_cip_buf;
-    logic [DATAW-1:0] key0, key1;
+    logic [DATAW-1:0] s01_ptext_d, s01_ptext_q;
+    logic [DATAW-1:0] s01_key_d, s01_key_q;
+    logic s01_valid_d, s01_valid_q;
+    logic s01_ready;
 
-    logic [DATAW-1:0] c01_key0_d, c01_key1_d;
-    logic [DATAW-1:0] c01_key0_q, c01_key1_q;
-    logic [DATAW-1:0] c01_data_d;
-    logic [DATAW-1:0] c01_data_q;
-    logic c1_enable;
+    always_comb begin
+        req_ack_o = s01_ready;
+        s01_ptext_d = s01_ptext_q;
+        s01_key_d = s01_key_q;
+        s01_valid_d = s01_valid_q;
+        if(req_val_i && req_ack_o) begin
+            s01_ptext_d = ptext_i;
+            s01_key_d = key_i;
+            s01_valid_d = 1;
+        end
+    end
 
-    assign key0 = {key_i[DATAW-1: DATAW/2], 16'd0};
-    assign key1 = {key_i[DATAW/2-1: 0], 16'd0};
-
-    enc_round#(
-        .DATAW(DATAW)
-    )enc_round_dut0(
-        .ptext_i    (ptext_i),
-        .key_i      (key0),
-        .cipher_o   (c0_cip_buf)
-    );
-
-    assign c01_key0_d = key0;
-    assign c01_key1_d = key1;
-    assign c01_data_d = c0_cip_buf;
-
-    always @(posedge clk_i) begin
-        if (~rst_ni) begin
-            c01_data_q <= 0;
-            c01_key0_q <= 0;
-            c01_key1_q <= 0;
-            c1_enable <= 0;
+    always_ff @(posedge clk) begin
+        if(~rst_ni) begin
+            s01_ptext_q <= 0;
+            s01_key_q <= 0;
+            s01_valid_q <= 0;
         end else begin
-            c01_data_q <= c01_data_d;
-            c01_key0_q <= c01_key0_d;
-            c01_key1_q <= c01_key1_d;
-            c1_enable <= 1;
+            s01_ptext_q <= s01_ptext_d;
+            s01_key_q <= s01_key_d;
+            s01_valid_q <= s01_valid_d;
+        end
+    end
+
+
+    always_comb begin
+        s01_ready = 1;
+        rsp_val_o = 0;
+        cipher_o = 0;
+        if(s01_valid_q) begin
+            s01_ready = 0;
+            if(rsp_ack_i) begin
+                rsp_val_o = 1;
+                cipher_o = s01_ptext_q ^ s01_key_q;
+            end
         end
     end
     
-    enc_round#(
-        .DATAW(DATAW)
-    )enc_round_dut1(
-        .ptext_i    (c01_data_q),
-        .key_i      (c01_key1_q),
-        .cipher_o   (c1_cip_buf)
-    );
-
-    always @(posedge clk_i) begin
-        if (~rst_ni || ~c1_enable) begin
-            cipher_o <= 0;
-        end else begin
-            cipher_o <= c1_cip_buf;
-        end
-    end
-
 endmodule
-
-
