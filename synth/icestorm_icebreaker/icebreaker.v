@@ -1,14 +1,17 @@
 module icebreaker#(
-    parameter UART_DATA_WIDTH = 8
+    parameter UART_DATA_WIDTH = 8,
+    parameter DATAW = 32
 ) (
     input  wire CLK,
     input  wire BTN_N,
     input  wire RX,
-    output wire TX
+    output wire TX,
+    output wire LED_GRN_N,
+    output wire P1A7
 );
 
-wire clk_12 = CLK;
-wire clk_50250;
+assign LED_GRN_N = BTN_N;
+assign P1A7 = BTN_N;
 
 // icepll -i 12 -o 50
 // F_PLLIN:    12.000 MHz (given)
@@ -25,6 +28,9 @@ wire clk_50250;
 
 // FILTER_RANGE: 1 (3'b001)
 
+// wire clk_50250 = CLK;
+wire clk_12 = CLK;
+wire clk_50250;
 SB_PLL40_PAD #(
     .FEEDBACK_PATH("SIMPLE"),
     .DIVR(4'b0000),
@@ -39,24 +45,50 @@ SB_PLL40_PAD #(
     .PLLOUTGLOBAL(clk_50250)
 );
 
-    reg [UART_DATA_WIDTH-1: 0]uart_buf_o;
+    reg [DATAW-1: 0]uart_buf_o;
     wire uart_rsp_rdy_i;
     wire uart_rsp_val_o;
-    uart_tx uart (
-        .clk(clk_50250),
-        .rst_n(BTN_N),
-        .data_val_i(uart_rsp_val_o),
-        .data_in(uart_buf_o),
-        .data_rdy_o(uart_rsp_rdy_i),
+    // uart_tx uart (
+    //     .clk(clk_50250),
+    //     .rst_n(BTN_N),
+    //     .data_val_i(uart_rsp_val_o),
+    //     .data_in(uart_buf_o),
+    //     .data_rdy_o(uart_rsp_rdy_i),
+    //     .tx(TX)
+    // );
+    // uart_tx uart (
+    //     .clk(clk_50250),
+    //     .rst_n(BTN_N),
+    //     .data_val_i(1),
+    //     .data_in(8'hab),
+    //     .data_rdy_o(_),
+    //     .tx(TX)
+    // );
+
+    // uart_tx32 uart (
+    //     .clk_i(clk_50250),
+    //     .rst_ni(BTN_N),
+    //     .req_val_i(uart_rsp_val_o),
+    //     .data_i(uart_buf_o),
+    //     .req_rdy_o(uart_rsp_rdy_i),
+    //     .tx(TX)
+    // );
+
+    uart_tx32 uart32 (
+        .clk_i(clk_50250),
+        .rst_ni(BTN_N),
+        .req_val_i(1),
+        .data_i(32'hdeadbeef),
+        .req_rdy_o(_),
         .tx(TX)
     );
 
-    top_module dut (
-        .clk_i(clk_50250),
-        .rst_ni(BTN_N),
-        .uart_rsp_rdy_i(uart_rsp_rdy_i),
-        .uart_rsp_data_o(uart_buf_o),
-        .uart_rsp_val_o(uart_rsp_val_o)
-    );
+    // top_module dut (
+    //     .clk_i(clk_50250),
+    //     .rst_ni(BTN_N),
+    //     .uart_rsp_rdy_i(uart_rsp_rdy_i),
+    //     .uart_rsp_data_o(uart_buf_o),
+    //     .uart_rsp_val_o(uart_rsp_val_o)
+    // );
 
 endmodule

@@ -64,3 +64,110 @@ module uart_tx(
     end
 
 endmodule
+
+module uart_tx32 (
+    input   clk_i,
+    input   rst_ni,
+    input   req_val_i,
+    input   [DATAW-1:0] data_i,
+    output  reg req_rdy_o,
+    output  reg tx
+);
+    localparam DATAW = 32;
+    localparam UART_DATAW = 8;
+    localparam  INIT	    = 3'd0,
+                MSB_31_24	= 3'd1,
+                MSB_23_16	= 3'd2,
+                MSB_15_8	= 3'd3,
+                MSB_7_0 	= 3'd4;
+
+    reg[2:0] state_d, state_q;
+
+    always @(posedge clk_i) begin
+        if(~rst_ni) begin
+            state_q <= INIT;
+            data_buf_q <= 0;
+        end else begin
+            state_q <= state_d;
+            data_buf_q <= data_buf_d;
+        end
+    end
+
+    reg [DATAW-1: 0]data_buf_d, data_buf_q;
+    reg [UART_DATAW-1:0]uart8_in_buf_i;
+    reg uart8_data_val_i, uart8_data_rdy_o;
+
+    uart_tx uart_tx_ins(
+        .clk                (clk_i),
+        .rst_n              (rst_ni),
+        .data_val_i         (uart8_data_val_i),
+        .data_in            (uart8_in_buf_i),
+        .data_rdy_o         (uart8_data_rdy_o),
+        .tx                 (TX)
+    );
+
+    always @(*) begin
+        data_buf_d = data_buf_q;
+        req_rdy_o = 0;
+        uart8_in_buf_i = 0;
+        uart8_data_val_i = 0;
+        case (state_q)
+            INIT: begin
+                req_rdy_o = 1;
+                if(req_val_i) begin
+                    data_buf_d = data_i;
+                    state_d = MSB_31_24;
+                end else begin
+                    data_buf_d = 0;
+                    state_d = INIT;
+                end
+            end
+            
+            MSB_31_24: begin
+                uart8_data_val_i = 1;
+                if(uart8_data_rdy_o) begin
+                    uart8_in_buf_i = data_buf_q[31:24];
+                    state_d = MSB_23_16;
+                end else begin
+                    state_d = MSB_31_24;
+                end
+            end
+
+            MSB_23_16: begin
+                uart8_data_val_i = 1;
+                if(uart8_data_rdy_o) begin
+                    uart8_in_buf_i = data_buf_q[23:16];
+                    state_d = MSB_15_8;
+                end else begin
+                    state_d = MSB_23_16;
+                end
+            end
+
+            MSB_15_8: begin
+                uart8_data_val_i = 1;
+                if(uart8_data_rdy_o) begin
+                    uart8_in_buf_i = data_buf_q[15:8];
+                    state_d = MSB_7_0;
+                end else begin
+                    state_d = MSB_15_8;
+                end
+            end
+
+            MSB_7_0: begin
+                uart8_data_val_i = 1;
+                if(uart8_data_rdy_o) begin
+                    uart8_in_buf_i = data_buf_q[7:0];
+                    state_d = INIT;
+                end else begin
+                    state_d = MSB_7_0;
+                end
+            end
+
+            default: begin
+                state_d = INIT;
+            end
+        endcase
+        
+    end
+
+endmodule
