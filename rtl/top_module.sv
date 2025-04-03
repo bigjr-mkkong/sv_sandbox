@@ -6,14 +6,14 @@ module top_module#(
     input   logic clk_i,
     input   logic rst_ni,
 
-    input   logic req_val_i;
+    input   logic req_val_i,
     input   logic [DATAW-1:0] ptext_i,
     input   logic [DATAW-1:0] key_i,
-    output  logic req_ack_o;
+    output  logic req_ack_o,
 
-    output  logic rsp_val_o;
-    output  logic [DATAW-1:0] cipher_o
-    input   logic rsp_ack_i;
+    output  logic rsp_val_o,
+    output  logic [DATAW-1:0] cipher_o,
+    input   logic rsp_ack_i
 );
 
     logic [DATAW-1:0] s01_ptext_d, s01_ptext_q;
@@ -33,7 +33,7 @@ module top_module#(
         end
     end
 
-    always_ff @(posedge clk) begin
+    always_ff @(posedge clk_i) begin
         if(~rst_ni) begin
             s01_ptext_q <= 0;
             s01_key_q <= 0;

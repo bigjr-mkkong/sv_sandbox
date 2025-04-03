@@ -5,8 +5,7 @@ from colorama import Fore
 
 from present import enc
 
-@cocotb.test()
-async def tb_0(dut):
+async def tb_singleround(dut):
     cocotb.start_soon(Clock(dut.clk_i, 5, unit="ns").start())
 
     dut.rst_ni.value = 0
@@ -38,3 +37,15 @@ async def tb_0(dut):
     for _ in range(10):
         await RisingEdge(dut.clk_i)
 
+@cocotb.test()
+async def tb_pipeline(dut):
+    cocotb.start_soon(Clock(dut.clk_i, 5, unit="ns").start())
+
+    dut.rst_ni.value = 0
+    for _ in range(5):
+        await RisingEdge(dut.clk_i)
+
+    dut.rst_ni.value = 1
+
+    for _ in range(10):
+        await RisingEdge(dut.clk_i)
