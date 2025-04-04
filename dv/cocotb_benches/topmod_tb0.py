@@ -47,5 +47,18 @@ async def tb_pipeline(dut):
 
     dut.rst_ni.value = 1
 
+    dut.req_val_i.value = 1
+    dut.ptext_i.value = 0
+    dut.key_i.value = 1
+
+    await RisingEdge(dut.clk_i)
+    dut.req_val_i.value = 0
+
+    dut.rsp_rdy_i.value = 0
+    for _ in range(3):
+        await RisingEdge(dut.clk_i)
+    dut.rsp_rdy_i.value = 1
+    await RisingEdge(dut.rsp_val_o)
+
     for _ in range(10):
         await RisingEdge(dut.clk_i)
