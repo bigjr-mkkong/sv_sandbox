@@ -5,15 +5,15 @@ export YOSYS_DATDIR := $(shell yosys-config --datdir)
 
 RTL := $(shell \
  BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
- python3 misc/convert_filelist.py Makefile rtl/rtl.f \
+ python3 misc/convert_filelist.py Makefile rtl/rtl.flist \
 )
 
 SV2V_ARGS := $(shell \
  BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
- python3 misc/convert_filelist.py sv2v rtl/rtl.f \
+ python3 misc/convert_filelist.py sv2v rtl/rtl.flist \
 )
 
-INCLUDES := $(shell grep '^-I' rtl/rtl.f)
+INCLUDES := $(shell grep '^-I' rtl/rtl.flist)
 COCOTB_BENCHES += dv.cocotb_benches.topmod_tb0
 
 GLS_RTL := $(shell cat synth/yosys_generic/gls.f | grep -v '^//' )
@@ -28,7 +28,7 @@ ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
 .PHONY: lint sim-cocotb gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
-	verilator lint/verilator.vlt -f rtl/rtl.f -f dv/dv.f --lint-only -Wall --top ${TOP}
+	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.f --lint-only -Wall --top ${TOP}
 
 sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
@@ -44,10 +44,10 @@ sim-cocotb:
 sim:
 	@echo "sim target not usable in this Makefile, please use sim-cocotb instead"
 	@exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.f -f dv/pre_synth.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
+	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
 
-synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.f
+synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.flist
 	mkdir -p $(dir $@)
 	sv2v ${SV2V_ARGS} -w $@ -DSYNTHESIS
 
