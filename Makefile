@@ -25,10 +25,11 @@ ICE_EXT_ARGS := $(shell cat synth/icestorm_icebreaker/gls.f | grep '^-')
 ICE_TOP := icebreaker
 ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
 
-.PHONY: lint sim-cocotb gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
+.PHONY: lint sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
-	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.f --lint-only -Wall --top ${TOP}
+	@echo "RTLs:" "$(RTL)"
+	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.flist --lint-only -Wall --top ${TOP}
 
 sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
@@ -44,8 +45,20 @@ sim-cocotb:
 sim:
 	@echo "sim target not usable in this Makefile, please use sim-cocotb instead"
 	@exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
+	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
+
+SV2V_DIR := ./sv2v
+
+RTL_BASENAME := $(notdir $(RTL))
+
+VERILOG_FILES := $(patsubst %.sv, $(SV2V_DIR)/%.v, $(SV_BASENAME))
+
+sv2v:
+	@mkdir -p $(SV2V_DIR)
+	@$(foreach svfile, $(RTL), \
+		sv2v $(svfile) > $(SV2V_DIR)/$(notdir $(basename $(svfile))).v; \
+		echo "✔ Converted $(svfile)";)
 
 synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.flist
 	mkdir -p $(dir $@)
@@ -54,7 +67,7 @@ synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.flist
 gls: synth/yosys_generic/build/synth.v
 	@echo "gls target not usable in this Makefile, please use gls-cocotb instead"
 	@exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/yosys_generic/gls.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
+	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/yosys_generic/gls.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
 
 gls-cocotb: synth/yosys_generic/build/synth.v
@@ -72,7 +85,7 @@ synth/yosys_generic/build/synth.v: synth/build/rtl.sv2v.v synth/yosys_generic/yo
 icestorm_icebreaker_gls: synth/icestorm_icebreaker/build/synth.v
 	@echo "icestorm_icebreaker_gls target not usable in this Makefile, please use icestorm_icebreaker_gls-cocotb instead"
 	@exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/icestorm_icebreaker/gls.f -f dv/dv.f --binary -Wno-fatal --top ${TOP}
+	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/icestorm_icebreaker/gls.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
 
 
@@ -121,12 +134,13 @@ vivado_basys3_program: synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys
 
 clean:
 	rm -rf \
-	 *.memh *.memb \
-	 *sim_dir *gls_dir \
-	 dump.vcd dump.fst \
-	 synth/build \
-	 synth/yosys_generic/build \
-	 synth/icestorm_icebreaker/build \
-	 synth/vivado_basys3/build \
-	 sim_build \
-	 results.xml
+	*.memh *.memb \
+	*sim_dir *gls_dir \
+	dump.vcd dump.fst \
+	synth/build \
+	synth/yosys_generic/build \
+	synth/icestorm_icebreaker/build \
+	synth/vivado_basys3/build \
+	sim_build \
+	results.xml \
+	sv2v/ \
