@@ -34,6 +34,9 @@ end
 
 // 仿真过程
 initial begin
+    $dumpfile("dump.vcd");
+    $dumpvars(0, MainCode_tb);
+
     // 初始条件
     rst_n = 0;
     StartStop = 0;
@@ -64,7 +67,7 @@ initial begin
     #5_000_000;  // 仿真5ms
 
     // 结束仿真
-    $stop;
+    $finish;
 end
 
 endmodule

@@ -1,4 +1,5 @@
-TOP := top_module
+# TOP := top_module
+TOP := MainCode_tb
 
 export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
 export YOSYS_DATDIR := $(shell yosys-config --datdir)
@@ -25,11 +26,11 @@ ICE_EXT_ARGS := $(shell cat synth/icestorm_icebreaker/gls.f | grep '^-')
 ICE_TOP := icebreaker
 ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
 
-.PHONY: lint sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
+.PHONY: lint sim sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
 lint:
 	@echo "RTLs:" "$(RTL)"
-	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.flist --lint-only -Wall --top ${TOP}
+	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.flist --lint-only -Wall --top ${TOP} --timescale 1ns/1ps
 
 sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
@@ -43,9 +44,7 @@ sim-cocotb:
 		MODULE="$(COCOTB_BENCHES)"
 
 sim:
-	@echo "sim target not usable in this Makefile, please use sim-cocotb instead"
-	@exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
+	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP} --trace
 	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
 
 SV2V_DIR := ./sv2v

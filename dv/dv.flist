@@ -1,7 +1,9 @@
-
-dv/dv_pkg.sv
-
-dv/blinky_tb.sv
+dv/ClockDivider_tb.v
+dv/MainCode_tb.v
+dv/ProgramCounter_tb.v
+dv/Reverser_tb.v
+dv/SevenSegEncoder_tb.v
+dv/TimerCoreLogic_tb.v
 
 --timing
 -j 0
