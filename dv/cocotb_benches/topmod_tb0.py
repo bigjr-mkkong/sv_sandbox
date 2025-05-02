@@ -2,7 +2,7 @@ import cocotb;
 from cocotb.clock import Clock
 from cocotb.triggers import Timer, RisingEdge, FallingEdge
 
-@cocotb.test()
+# @cocotb.test()
 async def tb_0(dut):
     cocotb.start_soon(Clock(dut.clk_i, 4, unit="ns").start())
 
@@ -40,3 +40,16 @@ async def tb_0(dut):
     for _ in range(100):
         await RisingEdge(dut.clk_i)
 
+@cocotb.test()
+async def tb_1(dut):
+    cocotb.start_soon(Clock(dut.clk_i, 4, unit="ns").start())
+
+    dut.rst_ni.value = 0
+    for _ in range(5):
+        await RisingEdge(dut.clk_i)
+
+    dut.rst_ni.value = 1
+    dut.uart_rsp_rdy_i.value = 1
+
+    for _ in range(100):
+        await RisingEdge(dut.clk_i)

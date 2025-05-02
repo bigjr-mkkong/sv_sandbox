@@ -1,7 +1,6 @@
 
 dv/dv_pkg.sv
-
-dv/blinky_tb.sv
+dv/top_module_tb.sv
 
 --timing
 -j 0

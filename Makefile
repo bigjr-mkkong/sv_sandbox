@@ -1,4 +1,5 @@
 TOP := top_module
+TOP_TB := $(TOP)_tb
 
 export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
 export YOSYS_DATDIR := $(shell yosys-config --datdir)
@@ -42,11 +43,12 @@ sim-cocotb:
 		TOPLEVEL=$(TOP) \
 		MODULE="$(COCOTB_BENCHES)"
 
+	# @echo "sim target not usable in this Makefile, please use sim-cocotb instead"
+	# @exit 1
 sim:
-	@echo "sim target not usable in this Makefile, please use sim-cocotb instead"
-	@exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
-	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
+	@echo "NOTE: sim uses different benches than sim-cocotb"
+	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist --binary -Wno-fatal --top ${TOP_TB} --trace
+	./${TOP_TB}_$@_dir/V${TOP_TB} +verilator+rand+reset+2
 
 SV2V_DIR := ./sv2v
 

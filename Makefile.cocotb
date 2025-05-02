@@ -24,7 +24,7 @@ SIM = verilator  # Change to your preferred simulator
 COMPILE_ARGS += $(INCLUDES)
 COMPILE_ARGS += -Wno-fatal
 
-EXTRA_ARGS += --trace --trace-fst --trace-structs
+EXTRA_ARGS += --trace --trace-structs
 
 # Cocotb default makefile
 include $(shell cocotb-config --makefiles)/Makefile.sim
