@@ -41,30 +41,20 @@ initial begin
     rst_n = 0;
     StartStop = 0;
     ModeSel = 0;  // Mode A（100Hz计数）
-    #100;
+    repeat (10) @(posedge CLK_50MHz);
 
     rst_n = 1;    // 解除复位
-    #100;
-
     // 启动计数
     StartStop = 1; // 上升沿触发开始
-    #20;
-    StartStop = 0;
-    
     // 运行一段时间
-    #2_000_000;  // 仿真2ms
+    repeat (200) @(posedge CLK_50MHz);
 
     // 切换到Mode B（倒计时2分钟）
     ModeSel = 1;
-    #100;
-
     // 再次触发启动
     StartStop = 1;
-    #20;
-    StartStop = 0;
-
     // 继续运行一段时间
-    #5_000_000;  // 仿真5ms
+    repeat (130) @(posedge CLK_50MHz);
 
     // 结束仿真
     $finish;
