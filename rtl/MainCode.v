@@ -28,7 +28,8 @@ ClockDivider clk_div_inst (
 
 // 根据ModeSel选择不同的工作时钟
 wire work_clk;
-assign work_clk = (ModeSel == 0) ? clk_100Hz : clk_1Hz;
+// assign work_clk = (ModeSel == 0) ? clk_100Hz : clk_1Hz;
+assign work_clk = CLK_50MHz;
 
 // 配置不同模式下的初值（重置时TimerCoreLogic使用）
 wire [7:0] lsb_reset_val;
