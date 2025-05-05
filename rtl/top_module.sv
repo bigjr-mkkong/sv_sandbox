@@ -11,6 +11,7 @@ module top_module#(
     input   logic [DATAW-1:0] key_i,
     output  logic req_rdy_o,
 
+    output  logic rsp_rdy_o,
     output  logic [DATAW-1:0] cipher_o
 );
 
@@ -22,19 +23,19 @@ module top_module#(
     logic valid_rd1_d, valid_rd1_q;
 
     always_comb begin
-        req_ack_o = 0;
+        req_rdy_o = 0;
         ptext_rd0_d = 0;
         key_rd0_d = 0;
         valid_rd0_d = 0;
         if (req_val_i) begin
-            req_ack_o = 1;
+            req_rdy_o = 1;
             ptext_rd0_d = ptext_i;
             key_rd0_d = key_i;
             valid_rd0_d = 1;
         end 
     end
 
-    always_ff begin
+    always @(posedge clk_i) begin
         if (~rst_ni) begin
             ptext_rd0_q <= 0;
             key_rd0_q <= 0;
@@ -60,7 +61,7 @@ module top_module#(
             .cipher_o(cipher_rd1_d)
         );
 
-    always_ff begin
+    always @(posedge clk_i) begin
         if (~rst_ni) begin
             valid_rd1_q <= 0;
             cipher_rd1_q <= 0;
@@ -70,6 +71,7 @@ module top_module#(
         end
     end
 
+    assign rsp_rdy_o = valid_rd1_q;
     assign cipher_o = valid_rd1_q?cipher_rd1_q:0;
 
 endmodule
