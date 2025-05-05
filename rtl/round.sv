@@ -1,5 +1,5 @@
 module enc_round#(
-    parameter DATAW = 32
+    parameter int DATAW = 32
     )(
         input   logic [DATAW-1:0]ptext_i,
         input   logic [DATAW-1:0]key_i,
@@ -29,7 +29,7 @@ module enc_round#(
 endmodule
 
 module add_round_key#(
-    parameter DATAW = 32
+    parameter int DATAW = 32
     )(
         input   logic [DATAW-1: 0] ptext_i,
         input   logic [DATAW-1: 0] key_i,
@@ -39,7 +39,7 @@ module add_round_key#(
 endmodule
 
 module pbox#(
-    parameter DATAW = 32
+    parameter int DATAW = 32
     )(
         input   logic [DATAW-1: 0]data_i,
         output  logic [DATAW-1: 0]data_o
@@ -54,9 +54,8 @@ module pbox#(
 
 
     
-    genvar i;
     generate
-        for (i=0; i<DATAW; i++) begin
+        for (genvar i=0; i<DATAW; i++) begin : l_data_i2o
             assign data_o[i] = data_i[pbox[i]];
         end
     endgenerate

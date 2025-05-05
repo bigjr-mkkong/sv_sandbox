@@ -42,6 +42,8 @@ module sbox_case(
             8'd232: data_o=8'd155; 8'd233: data_o=8'd30 ; 8'd234: data_o=8'd135; 8'd235: data_o=8'd233; 8'd236: data_o=8'd206; 8'd237: data_o=8'd85 ; 8'd238: data_o=8'd40 ; 8'd239: data_o=8'd223;
             8'd240: data_o=8'd140; 8'd241: data_o=8'd161; 8'd242: data_o=8'd137; 8'd243: data_o=8'd13 ; 8'd244: data_o=8'd191; 8'd245: data_o=8'd230; 8'd246: data_o=8'd66 ; 8'd247: data_o=8'd104;
             8'd248: data_o=8'd65 ; 8'd249: data_o=8'd153; 8'd250: data_o=8'd45 ; 8'd251: data_o=8'd15 ; 8'd252: data_o=8'd176; 8'd253: data_o=8'd84 ; 8'd254: data_o=8'd187; 8'd255: data_o=8'd22 ;
+            default:
+                data_o = 8'd0;
         endcase
     end
 
@@ -49,7 +51,7 @@ endmodule
 
 
 module sbox#(
-    parameter DATAW = 32
+    parameter int DATAW = 32
     )(
     input   logic [DATAW-1:0] data_i,
     output  logic [DATAW-1:0] data_o
