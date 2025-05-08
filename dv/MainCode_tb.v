@@ -1,62 +1,63 @@
 `timescale 1ns/1ps
 
-module MainCode_tb();
+module MainCode_tb;
 
-// Testbench信号定义
-reg CLK_50MHz;
-reg rst_n;
-reg StartStop;
-reg ModeSel;
+//====================================================
+// 1. 参数区
+//====================================================
+parameter PERIOD = 10;    // 50 MHz 时钟周期 = 10 ns*2 = 20 ns
+parameter FAST_K = 100;   // 缩放系数（原等待时间 / FAST_K）
+
+//====================================================
+// 2. 信号 & 接口（保持和 MainCode.v 一致）
+//====================================================
+reg        CLK_50MHz = 0;
+reg        rst_n     = 0;
+reg        StartStop = 0;
+reg        ModeSel   = 0;
+
 wire [6:0] HexMSBH;
 wire [6:0] HexMSBL;
 wire [6:0] HexLSBH;
 wire [6:0] HexLSBL;
-wire DOT;
+wire       DOT;
 
-// 实例化待测模块
+//====================================================
+// 3. 产生 50 MHz 时钟
+//====================================================
+always #(PERIOD/2) CLK_50MHz = ~CLK_50MHz;
+
+//====================================================
+// 4. 实例化 DUT
+//====================================================
 MainCode uut (
-    .CLK_50MHz(CLK_50MHz),
-    .rst_n(rst_n),
-    .StartStop(StartStop),
-    .ModeSel(ModeSel),
-    .HexMSBH(HexMSBH),
-    .HexMSBL(HexMSBL),
-    .HexLSBH(HexLSBH),
-    .HexLSBL(HexLSBL),
-    .DOT(DOT)
+    .CLK_50MHz  (CLK_50MHz),
+    .rst_n      (rst_n),
+    .StartStop  (StartStop),
+    .ModeSel    (ModeSel),
+    .HexMSBH    (HexMSBH),
+    .HexMSBL    (HexMSBL),
+    .HexLSBH    (HexLSBH),
+    .HexLSBL    (HexLSBL),
+    .DOT        (DOT)
 );
 
-// 生成50MHz时钟（周期20ns）
-initial begin
-    CLK_50MHz = 0;
-    forever #10 CLK_50MHz = ~CLK_50MHz;
-end
-
-// 仿真过程
+//====================================================
+// 5. 复位 & 激励序列 (全都除以 FAST_K 加速仿真)
+//====================================================
 initial begin
     $dumpfile("dump.vcd");
     $dumpvars(0, MainCode_tb);
-
-    // 初始条件
+    // —— 复位——
     rst_n = 0;
-    StartStop = 0;
-    ModeSel = 0;  // Mode A（100Hz计数）
-    repeat (10) @(posedge CLK_50MHz);
+    repeat(10) @(posedge CLK_50MHz);
+    rst_n = 1;
 
-    rst_n = 1;    // 解除复位
-    // 启动计数
-    StartStop = 1; // 上升沿触发开始
-    // 运行一段时间
-    repeat (200) @(posedge CLK_50MHz);
-
-    // 切换到Mode B（倒计时2分钟）
-    ModeSel = 1;
-    // 再次触发启动
+    ModeSel   = 1;  
     StartStop = 1;
-    // 继续运行一段时间
-    repeat (130) @(posedge CLK_50MHz);
+    repeat(1000) @(posedge CLK_50MHz);
+    StartStop = 0;      // 暂停
 
-    // 结束仿真
     $finish;
 end
 

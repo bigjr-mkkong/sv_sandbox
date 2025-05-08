@@ -1,66 +1,69 @@
-module MainCode (
+//============================================================
+//  MainCode.v   (2025‑05‑06 重新整理：ModeSel 直接驱动 TimerCoreLogic)
+//============================================================
+module MainCode ( 
+    input  CLK_50MHz,   // 50 MHz 系统时钟
+    input  rst_n,       // 低有效全局复位
+    input  StartStop,   // 翻转运行/暂停
+    input  ModeSel,     // 0=普通计数  1=倒计时 (02:00)
 
-    input CLK_50MHz,         // 50MHz clock input
-    input rst_n,             // Active-LOW reset signal
-    input StartStop,         // A control signal to start and stop
-    input ModeSel,           // A control signal to switch between two modes
-
-    output [6:0] HexMSBH,    // MSB higher digit 7-Seg
-    output [6:0] HexMSBL,    // MSB lower digit 7-Seg
-    output [6:0] HexLSBH,    // LSB higher digit 7-Seg
-    output [6:0] HexLSBL,    // LSB lower digit 7-Seg
-    output DOT               // Flashing decimal signal
+    output [6:0] HexMSBH,  // MSB 高位 7‑Seg
+    output [6:0] HexMSBL,  // MSB 低位 7‑Seg
+    output [6:0] HexLSBH,  // LSB 高位 7‑Seg
+    output [6:0] HexLSBL,  // LSB 低位 7‑Seg
+    output        DOT      // 闪烁小数点
 );
 
-// 内部连线
-wire clk_100Hz;
-wire clk_1Hz;
-wire [7:0] lsb_binary;
-wire [7:0] msb_binary;
+    //------------------------
+    // 1. 时钟分频 (50 MHz → 100 Hz / 1 Hz)
+    //------------------------
+    wire clk_100Hz;
+    wire clk_1Hz;
 
-// 时钟分频器实例
-ClockDivider clk_div_inst (
-    .CLK_50MHz(CLK_50MHz),
-    .rst_n(rst_n),
-    .CLK_100Hz(clk_100Hz),
-    .CLK_1Hz(clk_1Hz)
-);
+    ClockDivider clk_div_inst (
+        .CLK_50MHz (CLK_50MHz),
+        .rst_n     (rst_n),
+        .CLK_100Hz (clk_100Hz),
+        .CLK_1Hz   (clk_1Hz)
+    );
 
-// 根据ModeSel选择不同的工作时钟
-wire work_clk;
-// assign work_clk = (ModeSel == 0) ? clk_100Hz : clk_1Hz;
-assign work_clk = CLK_50MHz;
+    //------------------------
+    // 2. 根据 ModeSel 选择工作时钟
+    //------------------------
+    // wire work_clk = (ModeSel == 1'b0) ? clk_100Hz : clk_1Hz;  // A=100 Hz，B=1 Hz
+    wire work_clk = CLK_50MHz;
 
-// 配置不同模式下的初值（重置时TimerCoreLogic使用）
-wire [7:0] lsb_reset_val;
-wire [7:0] msb_reset_val;
+    //------------------------
+    // 3. 计数核心
+    //------------------------
+    wire [7:0] lsb_binary;
+    wire [7:0] msb_binary;
 
-assign lsb_reset_val = (ModeSel == 0) ? 8'd0 : 8'd0;   // 两种模式LSB初值都是0
-assign msb_reset_val = (ModeSel == 0) ? 8'd0 : 8'd2;   // Mode A=00, Mode B=02
+    TimerCoreLogic timer_inst (
+        .clk         (work_clk),
+        .rst_n       (rst_n),
+        .StartStop   (StartStop),
+        .ModeSel     (ModeSel),     // ★ 直接传入 ★
+        .LSBbinaryout(lsb_binary),
+        .MSBbinaryout(msb_binary)
+    );
 
-// TimerCoreLogic实例
-TimerCoreLogic timer_inst (
-    .clk(work_clk),
-    .rst_n(rst_n),
-    .StartStop(StartStop),
-    .LSBbinaryout(lsb_binary),
-    .MSBbinaryout(msb_binary),
-    .LSB_reset_val(lsb_reset_val),
-    .MSB_reset_val(msb_reset_val)
-);
+    //------------------------
+    // 4. 七段译码显示
+    //------------------------
+    SevenSegEncoder display_encoder (
+        .LSBBinary (lsb_binary),
+        .MSBBinary (msb_binary),
+        .ModeSel   (ModeSel),
+        .HexMSBH   (HexMSBH),
+        .HexMSBL   (HexMSBL),
+        .HexLSBH   (HexLSBH),
+        .HexLSBL   (HexLSBL)
+    );
 
-// SevenSegEncoder实例
-SevenSegEncoder display_encoder (
-    .LSBBinary(lsb_binary),
-    .MSBBinary(msb_binary),
-    .ModeSel(ModeSel),
-    .HexMSBH(HexMSBH),
-    .HexMSBL(HexMSBL),
-    .HexLSBH(HexLSBH),
-    .HexLSBL(HexLSBL)
-);
-
-// DOT输出，小数点闪烁
-assign DOT = clk_100Hz;
+    //------------------------
+    // 5. DOT 闪烁：100 Hz 时钟直接作分频
+    //------------------------
+    assign DOT = clk_100Hz;
 
 endmodule
