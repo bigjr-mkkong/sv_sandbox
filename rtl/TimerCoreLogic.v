@@ -35,7 +35,7 @@ module TimerCoreLogic (
     /* -------- LSB / MSB 计数控制 -------- */
     reg reset_pc_lsb, inc_pc_lsb;
     reg reset_pc_msb, inc_pc_msb;
-    reg carry_latched;                      // 仅 Mode B 用
+    // reg carry_latched;                      // 仅 Mode B 用
 
     wire [7:0] pc_lsb_out;
     wire [7:0] pc_msb_out;
@@ -51,7 +51,7 @@ module TimerCoreLogic (
             reset_pc_msb  <= 1'b1;
             inc_pc_lsb    <= 1'b0;
             inc_pc_msb    <= 1'b0;
-            carry_latched <= 1'b0;
+            // carry_latched <= 1'b0;
         end else begin
             /* 默认不动作 */
             reset_pc_lsb  <= 1'b0;
@@ -65,9 +65,13 @@ module TimerCoreLogic (
                 //========================================================
                 if (ModeSel) begin
                     // -------- Mode B：59 或 0 借位（去抖）--------
-                    if ((pc_lsb_out == 8'd59 || pc_lsb_out == 8'd0) && !carry_latched) begin
+                    // if ((pc_lsb_out == 8'd59 || pc_lsb_out == 8'd0) && !carry_latched) begin
+                    //     inc_pc_msb    <= 1'b1;   // MSB +1 == 分钟 −1
+                    //     carry_latched <= 1'b1;
+                    // end
+                    if ((pc_lsb_out == 8'd58)) begin
                         inc_pc_msb    <= 1'b1;   // MSB +1 == 分钟 −1
-                        carry_latched <= 1'b1;
+                        // carry_latched <= 1'b1;
                     end
                 end else begin
                     // -------- Mode A：99 进位 --------
@@ -88,8 +92,8 @@ module TimerCoreLogic (
                 //========================================================
                 // 3) 离开边界解除去抖锁存 (Mode B)
                 //========================================================
-                if (ModeSel && pc_lsb_out != 8'd0 && pc_lsb_out != 8'd59)
-                    carry_latched <= 1'b0;
+                // if (ModeSel && pc_lsb_out != 8'd0 && pc_lsb_out != 8'd59)
+                //     carry_latched <= 1'b0;
 
                 //========================================================
                 // 4) Mode B 计到 60:00 → 自动回到 58:00
@@ -99,7 +103,7 @@ module TimerCoreLogic (
                     pc_lsb_out == LSB_RESET_VAL) begin
                     reset_pc_lsb  <= 1'b1;
                     reset_pc_msb  <= 1'b1;
-                    carry_latched <= 1'b0;
+                    // carry_latched <= 1'b0;
                 end
             end
         end
