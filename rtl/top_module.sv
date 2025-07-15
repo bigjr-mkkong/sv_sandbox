@@ -1,40 +1,69 @@
 module top_module#(
+    parameter MEM_SZ = 16,
+    parameter ADDRW = $clog2(MEM_SZ),
     parameter DATAW = 32
     ) (
-    input   logic clk_i,
-    input   logic rst_ni,
+        input   logic clk_i,
+        input   logic rst_ni,
 
-    input   logic uart_rsp_rdy_i,
-    output  logic [DATAW-1: 0] uart_rsp_data_o,
-    output  logic uart_rsp_val_o
-);
+        input   logic req_val_i,
+        input   logic req_comm_i, //0 read, 1 write
+        input   logic [ADDRW-1: 0] req_addr_i,
+        input   logic [DATAW-1: 0] req_data_i,
+        output  logic req_rdy_o,
 
+        output  logic rsp_val_o,
+        output  logic [DATAW-1: 0] rsp_data_o, //when write, it return the written data
+        input   logic rsp_rdy_i
+    );
 
-    logic [DATAW-1: 0]uart_buf_q;
-    logic [DATAW-1: 0]uart_buf_d;
+    typedef enum logic [1:0]  {
+        IDLE,
+        RESP
+    } state_t;
+
+    state_t state_d, state_q;
+    logic   [DATAW-1: 0] data_buf;
+    logic   [DATAW-1: 0] mem[MEM_SZ-1: 0];
     
-    logic [DATAW-1: 0]send_out;
-
-    assign uart_rsp_data_o = send_out;
-
-    always_comb begin
-        uart_rsp_val_o = 0;
-        send_out = 0;
-        if (uart_rsp_rdy_i) begin
-            send_out = uart_buf_q;
-            uart_buf_d = uart_buf_q > 32'habcd ? 32'hab40 : uart_buf_q + 1;
-            uart_rsp_val_o = 1;
-        end else begin
-            uart_buf_d = uart_buf_q;
-        end
-    end
-        
     always @(posedge clk_i) begin
         if (~rst_ni) begin
-            uart_buf_q <= 32'hab40;
+            state_q <= IDLE;
+            data_buf <= 0;
+
+            for (int i = 0; i < MEM_SZ; i++) begin
+                mem[i] <= '0;
+            end
+
         end else begin
-            uart_buf_q <= uart_buf_d;
+            state_q <= state_d;
+            mem[req_addr_i] <= (req_comm_i)? req_data_i:mem[req_addr_i];
+            data_buf <= (~req_comm_i)? mem[req_addr_i]:req_data_i;
         end
     end
+
+    assign rsp_data_o = data_buf;
+
+    always_comb begin
+        state_d = state_q;
+        req_rdy_o = 0;
+        rsp_val_o = 0;
+        case (state_q) 
+            IDLE: begin
+                req_rdy_o = 1;
+                if (req_val_i) begin
+                    state_d = RESP;
+                end
+            end
+
+            RESP: begin
+                rsp_val_o = 1;
+                if (rsp_rdy_i) begin
+                    state_d = IDLE;
+                end
+            end
+        endcase
+    end
+
 
 endmodule

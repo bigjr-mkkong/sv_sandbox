@@ -6,6 +6,8 @@ module top_module_tb
 
 top_module_runner top_module_runner ();
 
+int val = 0;
+
 initial begin
     $dumpfile( "dump.vcd" );
     $dumpvars(0);
@@ -15,10 +17,13 @@ initial begin
 
     top_module_runner.reset();
 
-    repeat (4) begin
-        top_module_runner.tick_valid();
-        top_module_runner.wait_output();
-    end
+    // repeat (2) begin
+    //     top_module_runner.send(0, 0, 0);
+    // end
+
+    top_module_runner.send(1, 0, 12);
+    top_module_runner.send(1, 0, 15);
+    top_module_runner.send(0, 0, 7);
 
     $display( "End simulation." );
     $finish;
