@@ -1,4 +1,3 @@
-
 module top_module_tb
     import config_pkg::*;
     import dv_pkg::*;
@@ -6,7 +5,13 @@ module top_module_tb
 
 top_module_runner top_module_runner ();
 
+task automatic TLE_killer(input int tle_thres);
+    $display("Simulation will terminate after %d cycles\n", tle_thres);
+    top_module_runner.timeout_killer(tle_thres);
+endtask
+
 int val = 0;
+
 
 initial begin
     $dumpfile( "dump.vcd" );
@@ -16,14 +21,23 @@ initial begin
     $timeformat( -3, 3, "ms", 0);
 
     top_module_runner.reset();
+    
+    fork
+        begin
+            TLE_killer(100);
+        end
+    join_none
 
-    // repeat (2) begin
-    //     top_module_runner.send(0, 0, 0);
-    // end
+    top_module_runner.send(0, 10);
+    top_module_runner.send(0, 10);
+    top_module_runner.send(0, 10);
+    top_module_runner.send(0, 10);
 
-    top_module_runner.send(1, 0, 12);
-    top_module_runner.send(1, 0, 15);
-    top_module_runner.send(0, 0, 7);
+    top_module_runner.send(1, 10);
+    top_module_runner.send(1, 10);
+    top_module_runner.send(1, 10);
+    top_module_runner.send(1, 10);
+
 
     $display( "End simulation." );
     $finish;
