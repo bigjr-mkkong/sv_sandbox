@@ -30,6 +30,12 @@ top_module #(
     .uart_rsp_val_o(rsp_rdy)
 );
 
+task automatic tle_killer(int tle_thres);
+    repeat(tle_thres) @(posedge clk_i);
+    $display("Simulation timed out\n");
+    $finish;
+endtask;
+
 task automatic reset;
     rst_ni = 0;
     repeat (10) @(posedge clk_i);
@@ -48,7 +54,7 @@ task automatic wait_output;
 endtask
 
 task automatic wait_end;
-    repeat (100) @(posedge clk_i);
+    repeat (1000) @(posedge clk_i);
 endtask
 
 

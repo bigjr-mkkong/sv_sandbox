@@ -4,4 +4,5 @@ __pycache__
 *sim_dir
 *gls_dir
 *.fst
+*.vcd
 build
