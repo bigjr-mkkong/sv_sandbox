@@ -1,3 +1,6 @@
+`define ENQ 1'b0
+`define DEQ 1'b1
+
 module top_module_tb
     import config_pkg::*;
     import dv_pkg::*;
@@ -28,15 +31,11 @@ initial begin
         end
     join_none
 
-    top_module_runner.send(0, 10);
-    top_module_runner.send(0, 10);
-    top_module_runner.send(0, 10);
-    top_module_runner.send(0, 10);
 
-    top_module_runner.send(1, 10);
-    top_module_runner.send(1, 10);
-    top_module_runner.send(1, 10);
-    top_module_runner.send(1, 10);
+    top_module_runner.send(`DEQ, 10);
+    top_module_runner.send(`DEQ, 10);
+    top_module_runner.send(`DEQ, 10);
+    top_module_runner.send(`DEQ, 10);
 
 
     $display( "End simulation." );

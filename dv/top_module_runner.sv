@@ -57,6 +57,7 @@ endtask
 
 task automatic send(int comm, int data);
     logic [DATAW-1:0] result;
+    logic [ERRW-1:0] ecode;
 
     while(!req_rdy_o) @(posedge clk_i);
 
@@ -72,8 +73,10 @@ task automatic send(int comm, int data);
     rsp_rdy_i = 1;
 
     result = rsp_data_o;
+    ecode = rsp_state_o;
 
-    $display("rptr_q: %d, wptr_q: %d\n", result[31:28], result[3:0]);
+    $display("rptr_q: %d, wptr_q: %d , ecode: %d\n",
+        result[31:28], result[3:0], ecode);
     @(posedge clk_i);
     rsp_rdy_i = 0;
     @(posedge clk_i);
