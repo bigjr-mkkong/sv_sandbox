@@ -75,8 +75,8 @@ task automatic send(int comm, int data);
     result = rsp_data_o;
     ecode = rsp_state_o;
 
-    $display("rptr_q: %d, wptr_q: %d , ecode: %d\n",
-        result[31:28], result[3:0], ecode);
+    $display("comm: %s, rptr_q: %d, wptr_q: %d , ecode: %d\n",
+        (comm)?"DEQ":"ENQ",result[31:28], result[3:0], ecode);
     @(posedge clk_i);
     rsp_rdy_i = 0;
     @(posedge clk_i);

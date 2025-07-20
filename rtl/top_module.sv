@@ -98,7 +98,7 @@ always_comb begin
     rw_send_rdy_d = rw_send_rdy_q;
     rsp_val_o = rw_send_val_q;
 
-    if(!rsp_rdy_i) begin
+    if(rsp_rdy_i && rsp_val_o) begin
         rw_send_rdy_d = 0;
     end else begin
         rw_send_rdy_d = 1;
@@ -175,10 +175,14 @@ end
 
 always_comb begin: cnt_update
     if (en) begin
-        if(cmd_i) begin
-            cnt_d = cnt_q - 1;
+        if (state_out != 0) begin
+            cnt_d = cnt_q;
         end else begin
-            cnt_d = cnt_q + 1;
+            if(cmd_i) begin
+                cnt_d = cnt_q - 1;
+            end else begin
+                cnt_d = cnt_q + 1;
+            end
         end
     end else begin
         cnt_d = cnt_q;
@@ -189,26 +193,38 @@ ptr_gen ptr_adder1_int(
     .old_ptr(wptr_q),
     .new_ptr(wptr_buf)
     );
-assign wptr_d = ((~cmd_i) && en)?wptr_buf:wptr_q;
+// assign wptr_d = ((~cmd_i) && en)?wptr_buf:wptr_q;
 
 ptr_gen ptr_adder2_int(
     .old_ptr(rptr_q),
     .new_ptr(rptr_buf)
     );
-assign rptr_d = ((cmd_i) && en)?rptr_buf:rptr_q;
+// assign rptr_d = ((cmd_i) && en)?rptr_buf:rptr_q;
 
 always_comb begin: ecode_update
+    // if (rptr_q == wptr_q) begin
+    //     if (cnt_q == 0) begin
+    //         state_out = (cmd_i && en)?1:0;
+    //     end else if (cnt_q == 4'(FIFO_SZ)) begin
+    //         state_out = ((~cmd_i) && en)?2:0;
+    //     end else begin
+    //         state_out = (en)?3:0;
+    //     end
+    // end else begin
+    //     state_out = 0;
+    // end
+
     if (rptr_q == wptr_q) begin
         if (cnt_q == 0) begin
             state_out = (cmd_i && en)?1:0;
-        end else if (cnt_q == 4'(FIFO_SZ - 1)) begin
-            state_out = ((~cmd_i) && en)?2:0;
         end else begin
-            state_out = (en)?3:0;
+            state_out = ((~cmd_i) && en)?2:0;
         end
     end else begin
         state_out = 0;
     end
+    wptr_d = ((~cmd_i) && en && (state_out == 0))?wptr_buf:wptr_q;
+    rptr_d = ((cmd_i) && en && (state_out == 0))?rptr_buf:rptr_q;
 end
 
 // memory#(

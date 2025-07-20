@@ -27,15 +27,11 @@ initial begin
     
     fork
         begin
-            TLE_killer(100);
+            TLE_killer(1000);
         end
     join_none
 
-
-    top_module_runner.send(`DEQ, 10);
-    top_module_runner.send(`DEQ, 10);
-    top_module_runner.send(`DEQ, 10);
-    top_module_runner.send(`DEQ, 10);
+    repeat(16)    top_module_runner.send(`ENQ, 10);
 
 
     $display( "End simulation." );
