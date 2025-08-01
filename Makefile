@@ -5,13 +5,16 @@ export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
 export YOSYS_DATDIR := $(shell yosys-config --datdir)
 
 RTL := $(shell \
- BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
- python3 misc/convert_filelist.py Makefile rtl/rtl.flist \
+  BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
+  python3 misc/convert_filelist.py Makefile rtl/rtl.flist ; \
+  python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f \
 )
 
+
 SV2V_ARGS := $(shell \
- BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
- python3 misc/convert_filelist.py sv2v rtl/rtl.flist \
+  BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
+  python3 misc/convert_filelist.py Makefile rtl/rtl.flist ; \
+  python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f \
 )
 
 INCLUDES := $(shell grep '^-I' rtl/rtl.flist)
@@ -30,7 +33,7 @@ ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
 
 lint:
 	@echo "RTLs:" "$(RTL)"
-	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.flist --lint-only -Wall --top ${TOP}
+	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.flist -f IPs.flist --lint-only -Wall --top ${TOP}
 
 sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
@@ -47,7 +50,7 @@ sim-cocotb:
 	# @exit 1
 sim:
 	@echo "NOTE: sim uses different benches than sim-cocotb"
-	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist --binary -Wno-fatal --top ${TOP_TB} --trace
+	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist -f IPs.flist --binary -Wno-fatal --top ${TOP_TB} --trace
 	./${TOP_TB}_$@_dir/V${TOP_TB} +verilator+rand+reset+2
 
 SV2V_DIR := ./sv2v
@@ -146,3 +149,4 @@ clean:
 	sim_build \
 	results.xml \
 	sv2v/ \
+	IPs.flist
