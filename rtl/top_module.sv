@@ -7,32 +7,49 @@ module top_module
     input  logic         clk_i,
     input  logic         rst_ni,
 
-// _   _   _    ____ _____ 
-//| | | | / \  |  _ \_   _|
-//| | | |/ _ \ | |_) || |  
-//| |_| / ___ \|  _ < | |  
-// \___/_/   \_\_| \_\|_|  
-//----------------------------------------------------
-    //output to uart
-    taxi_axis_if.src                m_axis_rx,
-    //input from uart
-    taxi_axis_if.snk                s_axis_tx,
-    //uart interface
     input  wire logic               rxd,
-    output wire logic               txd,
-    //uart status
-    output wire logic               tx_busy,
-    output wire logic               rx_busy,
-    output wire logic               rx_overrun_error,
-    output wire logic               rx_frame_error,
-    //uart configuration
-    input  wire logic [PRE_W-1:0]   prescale
-//====================================================
-
-
+    output wire logic               txd
     
 );
 
 
+logic uart0_rxd, uart0_txd, uart0_tx_busy, uart0_rx_busy, uart0_rx_overrun_error, uart0_rx_frame_error, uart0_prescale;
+taxi_axis_if #(.DATA_W(32)) uart0_m_axis_rx();
+taxi_axis_if #(.DATA_W(32)) uart0_s_axis_tx();
+
+taxi_uart #(
+    .PRE_W(32)
+) 
+taxi_uart_inst0 (
+    .clk(clk_i),
+    .rst(rst_ni),
+    .s_axis_tx(uart0_s_axis_tx),
+    .m_axis_rx(uart0_m_axis_rx),
+    .rxd(uart0_rxd),
+    .txd(uart0_txd),
+    .tx_busy(uart0_tx_busy),
+    .rx_busy(uart0_rx_busy),
+    .rx_overrun_error(uart0_rx_overrun_error),
+    .rx_frame_error(uart0_rx_frame_error),
+    .prescale(uart0_prescale)
+);
+
+assign uart0_rxd = rxd;
+assign txd = uart0_txd;
+
+main_module #(
+    .DATAW(32)
+) main_module_inst (
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
+
+    .s_axis_tx(uart0_s_axis_tx),
+    .m_axis_rx(uart0_m_axis_rx),
+
+    .tx_busy(uart0_tx_busy),
+    .rx_busy(uart0_rx_busy),
+    .rx_overrun_error(uart0_rx_overrun_error),
+    .rx_frame_error(uart0_rx_frame_error)
+);
 
 endmodule

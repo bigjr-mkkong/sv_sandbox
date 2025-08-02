@@ -12,7 +12,7 @@ logic rsp_val;
 logic [DATAW-1: 0]rsp_data;
 logic rsp_rdy;
 
-logic uart0_rxd, uart0_txd, uart0_tx_busy, uart0_rx_busy, uart0_rx_overrun_error, uart0_rx_frame_error, uart0_prescale;
+logic uart0_rxd, uart0_txd;
 
 initial begin
     clk_i = 0;
@@ -22,42 +22,15 @@ initial begin
     end
 end
 
-taxi_axis_if #(.DATA_W(32)) uart0_m_axis_rx();
-taxi_axis_if #(.DATA_W(32)) uart0_s_axis_tx();
-
-taxi_uart #(
-    .PRE_W(32)
-) 
-taxi_uart_inst0 (
-    .clk(clk_i),
-    .rst(rst_ni),
-    .s_axis_tx(uart0_s_axis_tx),
-    .m_axis_rx(uart0_m_axis_rx),
-    .rxd(uart0_rxd),
-    .txd(uart0_txd),
-    .tx_busy(uart0_tx_busy),
-    .rx_busy(uart0_rx_busy),
-    .rx_overrun_error(uart0_rx_overrun_error),
-    .rx_frame_error(uart0_rx_frame_error),
-    .prescale(uart0_prescale)
-);
 
 top_module #(
     .DATAW(DATAW)
     ) topmod_inst (
-    .clk_i,
-    .rst_ni,
+    .clk_i(clk_i),
+    .rst_ni(rst_ni),
 
-    .s_axis_tx(uart0_s_axis_tx),
-    .m_axis_rx(uart0_m_axis_rx),
     .rxd(uart0_rxd),
-    .txd(uart0_txd),
-
-    .tx_busy(uart0_tx_busy),
-    .rx_busy(uart0_rx_busy),
-    .rx_overrun_error(uart0_rx_overrun_error),
-    .rx_frame_error(uart0_rx_frame_error),
-    .prescale(uart0_prescale)
+    .txd(uart0_txd)
 );
 
 task automatic tle_killer(int tle_thres);
