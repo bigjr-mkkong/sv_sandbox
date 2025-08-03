@@ -4,20 +4,20 @@ TOP_TB := $(TOP)_tb
 export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
 export YOSYS_DATDIR := $(shell yosys-config --datdir)
 
-RTL := $(shell \
-  BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
-  python3 misc/convert_filelist.py Makefile rtl/rtl.flist ; \
-  python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f \
-)
+RTL_FILES := .rtl_flist.tmp
 
+# SV2V_ARGS := $(shell \
+#   BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
+#   python3 misc/convert_filelist.py Makefile _rtl/rtl.flist ; \
+#   python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f \
+# )
 
-SV2V_ARGS := $(shell \
-  BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
-  python3 misc/convert_filelist.py Makefile rtl/rtl.flist ; \
-  python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f \
-)
+.PHONY:  lint sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
-INCLUDES := $(shell grep '^-I' rtl/rtl.flist)
+RTL := $(shell cat $(RTL_FILES))
+SV2V_ARGS := $(shell cat $(RTL_FILES))
+
+INCLUDES := $(shell grep '^-I' _rtl/rtl.flist)
 COCOTB_BENCHES += dv.cocotb_benches.topmod_tb0
 
 GLS_RTL := $(shell cat synth/yosys_generic/gls.f | grep -v '^//' )
@@ -29,11 +29,9 @@ ICE_EXT_ARGS := $(shell cat synth/icestorm_icebreaker/gls.f | grep '^-')
 ICE_TOP := icebreaker
 ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
 
-.PHONY: lint sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
-
 lint:
 	@echo "RTLs:" "$(RTL)"
-	verilator lint/verilator.vlt -f rtl/rtl.flist -f dv/dv.flist -f IPs.flist --lint-only -Wall --top ${TOP}
+	verilator lint/verilator.vlt -f _rtl/rtl.flist -f dv/dv.flist -f IPs.flist --lint-only -Wall --top ${TOP}
 
 sim-cocotb:
 	@echo "RTLs:" "$(RTL)"
@@ -50,7 +48,7 @@ sim-cocotb:
 	# @exit 1
 sim:
 	@echo "RTLs:" "$(RTL)"
-	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist -f IPs.flist --binary -Wno-fatal --top ${TOP_TB} --trace
+	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f _rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist -f IPs.flist --binary -Wno-fatal --top ${TOP_TB} --trace
 	./${TOP_TB}_$@_dir/V${TOP_TB} +verilator+rand+reset+2
 
 SV2V_DIR := ./sv2v
@@ -65,7 +63,7 @@ sv2v:
 		sv2v $(svfile) > $(SV2V_DIR)/$(notdir $(basename $(svfile))).v; \
 		echo "Converted $(svfile)";)
 
-synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.flist
+synth/build/rtl.sv2v.v: ${RTL} _rtl/rtl.flist
 	mkdir -p $(dir $@)
 	sv2v ${SV2V_ARGS} -w $@ -DSYNTHESIS
 
@@ -149,4 +147,6 @@ clean:
 	sim_build \
 	results.xml \
 	sv2v/ \
-	IPs.flist
+	IPs.flist \
+	_rtl \
+	$(RTL_FILES) 

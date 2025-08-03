@@ -6,3 +6,5 @@ __pycache__
 *.fst
 *.vcd
 build
+venv/
+.rtl_flist.tmp
