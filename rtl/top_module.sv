@@ -23,8 +23,8 @@ taxi_uart #(
 taxi_uart_inst0 (
     .clk(clk_i),
     .rst(rst_ni),
-    .s_axis_tx(uart0_s_axis_tx),
-    .m_axis_rx(uart0_m_axis_rx),
+    .s_axis_tx(uart0_m_axis_rx),
+    .m_axis_rx(uart0_s_axis_tx),
     .rxd(uart0_rxd),
     .txd(uart0_txd),
     .tx_busy(uart0_tx_busy),

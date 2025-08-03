@@ -23,5 +23,7 @@ module main_module
 //====================================================
 );
 
+assign m_axis_rx.tdata = 32'd114514;
+assign m_axis_rx.tvalid = 1;
 
 endmodule

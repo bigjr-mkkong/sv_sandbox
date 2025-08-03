@@ -49,7 +49,7 @@ sim-cocotb:
 	# @echo "sim target not usable in this Makefile, please use sim-cocotb instead"
 	# @exit 1
 sim:
-	@echo "NOTE: sim uses different benches than sim-cocotb"
+	@echo "RTLs:" "$(RTL)"
 	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist -f IPs.flist --binary -Wno-fatal --top ${TOP_TB} --trace
 	./${TOP_TB}_$@_dir/V${TOP_TB} +verilator+rand+reset+2
 
@@ -63,7 +63,7 @@ sv2v:
 	@mkdir -p $(SV2V_DIR)
 	@$(foreach svfile, $(RTL), \
 		sv2v $(svfile) > $(SV2V_DIR)/$(notdir $(basename $(svfile))).v; \
-		echo "✔ Converted $(svfile)";)
+		echo "Converted $(svfile)";)
 
 synth/build/rtl.sv2v.v: ${RTL} rtl/rtl.flist
 	mkdir -p $(dir $@)
