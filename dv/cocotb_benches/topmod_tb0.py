@@ -49,7 +49,6 @@ async def tb_1(dut):
         await RisingEdge(dut.clk_i)
 
     dut.rst_ni.value = 1
-    dut.uart_rsp_rdy_i.value = 1
 
     for _ in range(100):
         await RisingEdge(dut.clk_i)

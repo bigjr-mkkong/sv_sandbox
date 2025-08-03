@@ -14,6 +14,7 @@ RTL_FILES := .rtl_flist.tmp
 
 .PHONY:  lint sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
 
+RENDER_RTL := $(shell ./prepare.sh)
 RTL := $(shell cat $(RTL_FILES))
 SV2V_ARGS := $(shell cat $(RTL_FILES))
 
