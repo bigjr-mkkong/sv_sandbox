@@ -12,43 +12,50 @@ module top_module
     
 );
 
-logic uart0_rxd, uart0_txd, uart0_tx_busy, uart0_rx_busy, uart0_rx_overrun_error, uart0_rx_frame_error, uart0_prescale;
-taxi_axis_if #(.DATA_W(32)) uart0_m_axis_rx();
-taxi_axis_if #(.DATA_W(32)) uart0_s_axis_tx();
+{% if UART0.exist == True %}
 
-taxi_uart #(
-    .PRE_W(32)
-) 
-taxi_uart_inst0 (
-    .clk(clk_i),
-    .rst(rst_ni),
-    .s_axis_tx(uart0_m_axis_rx),
-    .m_axis_rx(uart0_s_axis_tx),
-    .rxd(uart0_rxd),
-    .txd(uart0_txd),
-    .tx_busy(uart0_tx_busy),
-    .rx_busy(uart0_rx_busy),
-    .rx_overrun_error(uart0_rx_overrun_error),
-    .rx_frame_error(uart0_rx_frame_error),
-    .prescale(uart0_prescale)
-);
+    logic uart0_rxd, uart0_txd, uart0_tx_busy, uart0_rx_busy, uart0_rx_overrun_error, uart0_rx_frame_error, uart0_prescale;
+    taxi_axis_if #(.DATA_W({{UART0.AXI_DATAW}})) uart0_m_axis_rx();
+    taxi_axis_if #(.DATA_W({{UART0.AXI_DATAW}})) uart0_s_axis_tx();
 
-assign uart0_rxd = rxd;
-assign txd = uart0_txd;
+    taxi_uart #(
+        .PRE_W({{UART0.PRE_W}})
+    ) 
+    taxi_uart_inst0 (
+        .clk(clk_i),
+        .rst(rst_ni),
+        .s_axis_tx(uart0_m_axis_rx),
+        .m_axis_rx(uart0_s_axis_tx),
+        .rxd(uart0_rxd),
+        .txd(uart0_txd),
+        .tx_busy(uart0_tx_busy),
+        .rx_busy(uart0_rx_busy),
+        .rx_overrun_error(uart0_rx_overrun_error),
+        .rx_frame_error(uart0_rx_frame_error),
+        .prescale(uart0_prescale)
+    );
+
+    assign uart0_rxd = rxd;
+    assign txd = uart0_txd;
+
+{% endif %}
 
 main_module #(
     .DATAW(32)
 ) main_module_inst (
-    .clk_i(clk_i),
-    .rst_ni(rst_ni),
+    .clk_i(clk_i)
+    ,.rst_ni(rst_ni)
 
-    .s_axis_tx(uart0_s_axis_tx),
-    .m_axis_rx(uart0_m_axis_rx),
+{% if UART0.exist == True %}
+    ,.s_axis_tx(uart0_s_axis_tx)
+    ,.m_axis_rx(uart0_m_axis_rx)
 
-    .tx_busy(uart0_tx_busy),
-    .rx_busy(uart0_rx_busy),
-    .rx_overrun_error(uart0_rx_overrun_error),
-    .rx_frame_error(uart0_rx_frame_error)
+    ,.tx_busy(uart0_tx_busy)
+    ,.rx_busy(uart0_rx_busy)
+    ,.rx_overrun_error(uart0_rx_overrun_error)
+    ,.rx_frame_error(uart0_rx_frame_error)
+{% endif %}
+
 );
 
 endmodule

@@ -5,6 +5,7 @@ module main_module
     input logic      clk_i,
     input logic      rst_ni,
 
+{% if UART0.exist == True %}
 // _   _   _    ____ _____ 
 //| | | | / \  |  _ \_   _|
 //| | | |/ _ \ | |_) || |  
@@ -21,9 +22,8 @@ module main_module
     input wire logic               rx_overrun_error,
     input wire logic               rx_frame_error
 //====================================================
+{% endif %}
 );
 
-assign m_axis_rx.tdata = 32'd114514;
-assign m_axis_rx.tvalid = 1;
 
 endmodule
