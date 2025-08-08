@@ -12,7 +12,6 @@ module top_module
     
 );
 
-
 logic uart0_rxd, uart0_txd, uart0_tx_busy, uart0_rx_busy, uart0_rx_overrun_error, uart0_rx_frame_error, uart0_prescale;
 taxi_axis_if #(.DATA_W(32)) uart0_m_axis_rx();
 taxi_axis_if #(.DATA_W(32)) uart0_s_axis_tx();
