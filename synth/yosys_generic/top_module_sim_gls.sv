@@ -14,11 +14,11 @@ top_module #(
     .DATAW(DATAW),
     .PRE_W(PRE_W)
 ) top_module (
-		.clk_i(clk_i),
-		.rst_ni(rst_ni),
+		.clk_i(clk_i)
+		,.rst_ni(rst_ni)
 
-		.rxd(rxd),
-		.txd(txd)
+		,.rxd(rxd)
+		,.txd(txd)
     );
 
 endmodule

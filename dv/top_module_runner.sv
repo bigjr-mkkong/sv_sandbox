@@ -5,7 +5,7 @@ module top_module_runner;
 logic clk_i;
 logic rst_ni;
 
-localparam realtime ClockPeriod = 6ms;
+localparam realtime ClockPeriod = 21ns; // 48mhz
 localparam DATAW = 32;
 
 logic rsp_val;
@@ -57,7 +57,7 @@ task automatic wait_output;
 endtask
 
 task automatic wait_end;
-    repeat (100) @(posedge clk_i);
+    repeat (2000) @(posedge clk_i);
 endtask
 
 

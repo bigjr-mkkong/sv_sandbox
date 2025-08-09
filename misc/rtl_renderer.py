@@ -8,7 +8,10 @@ UART0 = {
         "exist": True,
         "AXI_DATAW": 8,
         "PRE_W": 16,
+        "BAUD": 115200,
+        "Fclk": 48000000,
         }
+UART0["PRE_VAL"] = int(UART0["Fclk"] / (UART0["BAUD"] * 8))
 
 Configs = {
         "UART0": UART0

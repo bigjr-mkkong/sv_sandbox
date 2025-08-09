@@ -22,7 +22,7 @@ initial begin
 
     fork
         begin
-            TLE_killer(1000);
+            TLE_killer(5000);
         end
     join_none
 
