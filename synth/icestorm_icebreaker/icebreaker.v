@@ -40,7 +40,6 @@ SB_PLL40_PAD #(
 
 top_module #(
     .DATAW(DATAW),
-    .PRE_W(PRE_W)
 ) top_module_inst (
 		.clk_i(clk_48)
 		,.rst_ni(rst_ni)
