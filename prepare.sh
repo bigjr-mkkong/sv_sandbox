@@ -1,24 +1,14 @@
-#!/bin/bash
-set -e  # Exit on error
+#!/usr/bin/env bash
+set -euo pipefail
 
-source venv/bin/activate
+project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+python_bin="${PYTHON:-$project_root/venv/bin/python3}"
 
-RTL_FILES=".rtl_flist.tmp"
-export BASEJUMP_STL_DIR="$(realpath third_party/basejump_stl)"
+if [[ ! -x "$python_bin" ]]; then
+    python_bin="$(command -v python3)"
+fi
 
-rm -f $RTL_FILES
-rm -rf _rtl/
-
-echo "[*] Touching $RTL_FILES"
-touch "$RTL_FILES"
-
-echo "[*] Rendering rtl"
-python3 misc/rtl_renderer.py
-
-echo "[*] Generating top module flist"
-python3 misc/convert_filelist.py Makefile _rtl/rtl.flist > "$RTL_FILES"
-
-echo "[*] Generating IPs.flist for taxi_uart"
-python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f >> "$RTL_FILES"
-
-deactivate
+"$python_bin" "$project_root/misc/rtl_renderer.py" \
+    --source-dir "$project_root/rtl" \
+    --output-dir "$project_root/build/rtl" \
+    --config "$project_root/rtl/config.json"

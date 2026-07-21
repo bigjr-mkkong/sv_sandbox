@@ -1,11 +1,13 @@
-
 yosys -import
 
-read_verilog synth/build/rtl.sv2v.v
-read_verilog -sv synth/yosys_generic/top_module_sim_gls.sv
+set rtl_filelist [lindex $argv 0]
+set output_netlist [lindex $argv 1]
 
-prep
+read_slang --top top_module -f $rtl_filelist
+hierarchy -check -top top_module
+prep -top top_module
 opt -full
+check
 stat
 
-write_verilog -noexpr -noattr -simple-lhs synth/yosys_generic/build/synth.v
+write_verilog -noexpr -noattr -simple-lhs $output_netlist

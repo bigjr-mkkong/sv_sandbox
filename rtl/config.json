@@ -1,0 +1,9 @@
+{
+  "UART0": {
+    "ENABLE": true,
+    "module_name": "taxi_uart",
+    "AXI_DATAW": 8,
+    "PRE_W": 16,
+    "BAUD": 115200
+  }
+}

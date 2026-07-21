@@ -1,26 +1,27 @@
+`timescale 1ns / 1ps
 
 module basys3 (
     input  logic       sys_clk,
-    output logic [0:0] led,
-    input  logic       btnC
+    input  logic       btnC,
+    input  logic       RsRx,
+    output logic       RsTx,
+    output logic [0:0] led
 );
 
-wire logic rst_n = !btnC;
+    logic clk_48;
 
-logic clk_50;
-mmcm_100_to_50 pll (
-    .clk_100(sys_clk),
-    .clk_50(clk_50)
-);
+    mmcm_100_to_48 clock_generator (
+        .clk_100(sys_clk),
+        .clk_48(clk_48)
+    );
 
-// blinky #(
-//     .ResetValue(5000000)
-// ) blinky (
-//     .clk_i(clk_50),
-//     .rst_ni(rst_n),
-//     .led_o(led[0])
-// );
+    top_module u_top (
+        .clk_i(clk_48),
+        .rst_ni(!btnC),
+        .rxd_i(RsRx),
+        .txd_o(RsTx)
+    );
 
-assign led = btnC;
+    assign led[0] = RsTx;
 
 endmodule

@@ -1,48 +1,91 @@
-import os
+#!/usr/bin/env python3
+"""Render project RTL templates and their canonical file list."""
+
+import argparse
+import json
 import re
-from jinja2 import Environment, FileSystemLoader
+from pathlib import Path
 
-# I will use jinja2 as the pre-processor engine for this sv template
+from jinja2 import Environment, FileSystemLoader, StrictUndefined
 
-UART0 = {
-        "exist": True,
-        "AXI_DATAW": 8,
-        "PRE_W": 16,
-        "BAUD": 115200,
-        "Fclk": 48000000,
-        }
-UART0["PRE_VAL"] = int(UART0["Fclk"] / (UART0["BAUD"] * 8))
 
-Configs = {
-        "UART0": UART0
-        }
+RTL_SUFFIXES = {".sv", ".svh", ".v", ".vh"}
+SV_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 
-template_dir = "rtl/"
-output_dir = "_rtl/"
 
-env = Environment(loader=FileSystemLoader(template_dir))
+def validate_config(config: object) -> dict:
+    """Validate common module switches and this template's UART settings."""
+    if not isinstance(config, dict):
+        raise ValueError("the top level of config.json must be a JSON object")
 
-for root, _, files in os.walk(template_dir):
-    for filename in files:
-        rel_input_path = os.path.relpath(os.path.join(root, filename), template_dir)
-        full_input_path = os.path.join(root, filename)
-        output_path = os.path.join(output_dir, rel_input_path)
+    for instance_name, module_config in config.items():
+        if not isinstance(module_config, dict):
+            raise ValueError(f"{instance_name} must be a JSON object")
+        if not isinstance(module_config.get("ENABLE"), bool):
+            raise ValueError(f"{instance_name}.ENABLE must be true or false")
 
-        os.makedirs(os.path.dirname(output_path), exist_ok=True)
+        module_name = module_config.get("module_name")
+        if not isinstance(module_name, str) or not SV_IDENTIFIER.fullmatch(module_name):
+            raise ValueError(
+                f"{instance_name}.module_name must be a SystemVerilog identifier"
+            )
 
-        if filename.endswith(".sv") or \
-                filename.endswith(".svh") or\
-                filename.endswith("v"):
+    if "UART0" not in config:
+        raise ValueError("config.json must contain a UART0 object")
 
-            template = env.get_template(rel_input_path)
-            rendered = template.render(Configs)
-            with open(output_path, "w") as f:
-                f.write(rendered)
-            print(f"Rendered (system)verilog: {rel_input_path} -> {output_path}")
+    uart_config = config["UART0"]
+    if "Fclk" in uart_config:
+        raise ValueError(
+            "UART0.Fclk is project-owned; configure "
+            "config_pkg::CLOCK_FREQUENCY_HZ instead"
+        )
+    if uart_config["ENABLE"]:
+        for field_name in ("AXI_DATAW", "PRE_W", "BAUD"):
+            value = uart_config.get(field_name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(
+                    f"UART0.{field_name} must be a positive integer when UART0 is enabled"
+                )
 
-        elif filename.endswith(".flist"):
-            with open(full_input_path, "r") as f_in, open(output_path, "w") as f_out:
-                for line in f_in:
-                    f_out.write(re.sub(r'^rtl/', '_rtl/', line))
-            print(f"Rendered flist: {rel_input_path} -> {output_path}")
+    return config
 
+
+def render_tree(source_dir: Path, output_dir: Path, config_path: Path) -> None:
+    config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
+    environment = Environment(
+        loader=FileSystemLoader(source_dir),
+        undefined=StrictUndefined,
+        keep_trailing_newline=True,
+    )
+
+    for source_path in sorted(path for path in source_dir.rglob("*") if path.is_file()):
+        relative_path = source_path.relative_to(source_dir)
+        output_path = output_dir / relative_path
+
+        if source_path.suffix in RTL_SUFFIXES:
+            rendered = environment.get_template(relative_path.as_posix()).render(**config)
+        elif source_path.suffix == ".flist":
+            rendered = re.sub(
+                r"(?m)^(\s*)rtl/",
+                r"\1build/rtl/",
+                source_path.read_text(encoding="utf-8"),
+            )
+        else:
+            continue
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(rendered, encoding="utf-8")
+        print(f"Rendered {relative_path} -> {output_path}")
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--source-dir", type=Path, default=Path("rtl"))
+    parser.add_argument("--output-dir", type=Path, default=Path("build/rtl"))
+    parser.add_argument("--config", type=Path, default=Path("rtl/config.json"))
+    args = parser.parse_args()
+    render_tree(args.source_dir.resolve(), args.output_dir.resolve(), args.config.resolve())
+
+
+if __name__ == "__main__":
+    main()

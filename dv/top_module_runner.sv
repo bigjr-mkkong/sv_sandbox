@@ -1,64 +1,43 @@
-import config_pkg::*;
+`timescale 1ns / 1ps
 
 module top_module_runner;
 
-logic clk_i;
-logic rst_ni;
+    localparam realtime CLOCK_PERIOD = 1s / config_pkg::CLOCK_FREQUENCY_HZ;
 
-localparam realtime ClockPeriod = 21ns; // 48mhz
-localparam DATAW = 32;
+    logic clk_i = 1'b0;
+    logic rst_ni;
+    logic uart_rxd_i;
+    logic uart_txd_o;
 
-logic rsp_val;
-logic [DATAW-1: 0]rsp_data;
-logic rsp_rdy;
+    always #(CLOCK_PERIOD / 2) clk_i = !clk_i;
 
-logic uart0_rxd, uart0_txd;
+    top_module dut (
+        .clk_i(clk_i),
+        .rst_ni(rst_ni),
+        .rxd_i(uart_rxd_i),
+        .txd_o(uart_txd_o)
+    );
 
-initial begin
-    clk_i = 0;
-    forever begin
-        #(ClockPeriod/2);
-        clk_i = !clk_i;
-    end
-end
+    task automatic reset;
+        uart_rxd_i = 1'b1;
+        rst_ni = 1'b0;
+        repeat (10) @(posedge clk_i);
+        rst_ni = 1'b1;
+    endtask
 
+    task automatic expect_uart_byte(input logic [dv_pkg::UART_DATA_BITS-1:0] expected);
+        @(negedge uart_txd_o);
+        repeat (int'(dut.UART_PRESCALE) / 2) @(posedge clk_i);
+        assert (uart_txd_o == 1'b0) else $error("Invalid UART start bit");
 
-top_module #(
-    .DATAW(DATAW)
-    ) topmod_inst (
-    .clk_i(clk_i),
-    .rst_ni(rst_ni),
+        for (int bit_index = 0; bit_index < dv_pkg::UART_DATA_BITS; bit_index++) begin
+            repeat (int'(dut.UART_PRESCALE)) @(posedge clk_i);
+            assert (uart_txd_o == expected[bit_index])
+                else $error("UART bit %0d mismatch", bit_index);
+        end
 
-    .rxd(uart0_rxd),
-    .txd(uart0_txd)
-);
-
-task automatic tle_killer(int tle_thres);
-    repeat(tle_thres) @(posedge clk_i);
-    $display("Simulation timed out\n");
-    $finish;
-endtask;
-
-task automatic reset;
-    rst_ni = 0;
-    repeat (10) @(posedge clk_i);
-    rst_ni = 1;
-endtask
-
-task automatic tick_valid;
-    rsp_val = 1;
-    @(posedge clk_i);
-    rsp_val = 0;
-endtask
-
-task automatic wait_output;
-    while(!rsp_rdy);
-    $info("read out: %h\n", rsp_data);
-endtask
-
-task automatic wait_end;
-    repeat (2000) @(posedge clk_i);
-endtask
-
+        repeat (int'(dut.UART_PRESCALE)) @(posedge clk_i);
+        assert (uart_txd_o == 1'b1) else $error("Invalid UART stop bit");
+    endtask
 
 endmodule

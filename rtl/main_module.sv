@@ -1,47 +1,36 @@
-module main_module
-#(
-    parameter DATAW = 8
-) (
-    input logic      clk_i,
-    input logic      rst_ni,
+`timescale 1ns / 1ps
 
-{% if UART0.exist == True %}
-// _   _   _    ____ _____ 
-//| | | | / \  |  _ \_   _|
-//| | | |/ _ \ | |_) || |  
-//| |_| / ___ \|  _ < | |  
-// \___/_/   \_\_| \_\|_|  
-//----------------------------------------------------
-    //output to uart
-    taxi_axis_if.src                m_axis_rx,
-    //input from uart
-    taxi_axis_if.snk                s_axis_tx,
-    //uart state
-    input wire logic               tx_busy,
-    input wire logic               rx_busy,
-    input wire logic               rx_overrun_error,
-    input wire logic               rx_frame_error
-//====================================================
-{% endif %}
+module main_module #(
+    parameter int unsigned DATA_WIDTH = 8
+) (
+    input  logic                  clk_i,
+    input  logic                  rst_ni,
+    output logic [DATA_WIDTH-1:0] m_axis_tx_tdata_o,
+    output logic                  m_axis_tx_tvalid_o,
+    input  logic                  m_axis_tx_tready_i
 );
 
-    logic [DATAW-1:0]data_r, data_n, data_buf;
+    logic [DATA_WIDTH-1:0] data_r;
+    logic [DATA_WIDTH-1:0] data_next;
 
-    always @(posedge clk_i) begin
-        if (~rst_ni) begin
-            data_r <= 8'h41; // 'A'
+    always_ff @(posedge clk_i) begin
+        if (!rst_ni) begin
+            data_r <= DATA_WIDTH'(8'h41);
         end else begin
-            data_r <= data_n;
+            data_r <= data_next;
         end
     end
 
     always_comb begin
-        m_axis_rx.tvalid = 1;
-        data_buf = (data_r >= 8'h5a)?8'h41:data_r + 1;
-        data_n = (m_axis_rx.tready)?data_buf:data_r;
+        m_axis_tx_tdata_o = data_r;
+        m_axis_tx_tvalid_o = 1'b1;
+
+        data_next = data_r;
+        if (m_axis_tx_tready_i) begin
+            data_next = data_r >= DATA_WIDTH'(8'h5a)
+                ? DATA_WIDTH'(8'h41)
+                : data_r + DATA_WIDTH'(1);
+        end
     end
 
-    always_comb begin
-        m_axis_rx.tdata = data_r;
-    end
 endmodule

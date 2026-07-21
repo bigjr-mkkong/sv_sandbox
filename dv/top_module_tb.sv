@@ -1,39 +1,20 @@
+`timescale 1ns / 1ps
 
-module top_module_tb
-    import config_pkg::*;
-    import dv_pkg::*;
-    ;
+module top_module_tb;
 
-top_module_runner top_module_runner ();
+    top_module_runner runner();
 
-task automatic TLE_killer(int thres);
-    $display("Spawned tle killer, simulation will end in %d cycls\n", thres);
-    top_module_runner.tle_killer(thres);
-endtask;
+    initial begin
+        $dumpfile("build/sim/dump.fst");
+        $dumpvars(0, top_module_tb);
+        $display("Begin RTL simulation.");
 
-initial begin
-    $dumpfile( "dump.vcd" );
-    $dumpvars(0);
-    $display( "Begin simulation." );
-    $urandom(100);
-    $timeformat( -3, 3, "ms", 0);
+        runner.reset();
+        runner.expect_uart_byte(8'h41);
+        runner.expect_uart_byte(8'h42);
 
-    top_module_runner.reset();
-
-    fork
-        begin
-            TLE_killer(5000);
-        end
-    join_none
-
-    top_module_runner.wait_end();
-    // repeat (4) begin
-    //     top_module_runner.tick_valid();
-    //     top_module_runner.wait_output();
-    // end
-
-    $display( "End simulation." );
-    $finish;
-end
+        $display("RTL simulation passed.");
+        $finish;
+    end
 
 endmodule

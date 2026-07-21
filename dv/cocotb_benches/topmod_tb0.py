@@ -1,54 +1,41 @@
-import cocotb;
+import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import Timer, RisingEdge, FallingEdge
+from cocotb.triggers import FallingEdge, RisingEdge
 
-# @cocotb.test()
-async def tb_0(dut):
-    cocotb.start_soon(Clock(dut.clk_i, 4, unit="ns").start())
 
-    dut.rst_ni.value = 0
-    for _ in range(5):
-        await RisingEdge(dut.clk_i)
+CLOCK_PERIOD_PS = 20_834
+UART_PRESCALE_CYCLES = 417
 
-    dut.rst_ni.value = 1
 
-    dut.uart_rsp_rdy_i.value = 1
-    data = 0
+async def wait_clock_cycles(clock, count):
+    for _ in range(count):
+        await RisingEdge(clock)
 
-    await RisingEdge(dut.uart_rsp_val_o)
-    data = dut.uart_rsp_data_o.value
-    assert(data == 0x31)
 
-    await RisingEdge(dut.clk_i)
-    dut.uart_rsp_rdy_i.value = 0
+async def receive_uart_byte(dut):
+    txd_o = dut.txd_o
+    await FallingEdge(txd_o)
+    await wait_clock_cycles(dut.clk_i, UART_PRESCALE_CYCLES // 2)
+    assert int(txd_o.value) == 0, "invalid UART start bit"
 
-    for _ in range (2):
-        await RisingEdge(dut.clk_i)
+    value = 0
+    for bit_index in range(8):
+        await wait_clock_cycles(dut.clk_i, UART_PRESCALE_CYCLES)
+        value |= int(txd_o.value) << bit_index
 
-    dut.uart_rsp_rdy_i.value = 1
+    await wait_clock_cycles(dut.clk_i, UART_PRESCALE_CYCLES)
+    assert int(txd_o.value) == 1, "invalid UART stop bit"
+    return value
 
-    await RisingEdge(dut.uart_rsp_val_o)
-    data = dut.uart_rsp_data_o.value
-    assert(data == 0x32)
-
-    await RisingEdge(dut.clk_i)
-    dut.uart_rsp_rdy_i.value = 0
-
-    for _ in range (2):
-        await RisingEdge(dut.clk_i)
-
-    for _ in range(100):
-        await RisingEdge(dut.clk_i)
 
 @cocotb.test()
-async def tb_1(dut):
-    cocotb.start_soon(Clock(dut.clk_i, 4, unit="ns").start())
-
+async def transmits_alphabet(dut):
+    cocotb.start_soon(Clock(dut.clk_i, CLOCK_PERIOD_PS, unit="ps").start())
+    dut.rxd_i.value = 1
     dut.rst_ni.value = 0
-    for _ in range(5):
+    for _ in range(10):
         await RisingEdge(dut.clk_i)
-
     dut.rst_ni.value = 1
 
-    for _ in range(100):
-        await RisingEdge(dut.clk_i)
+    assert await receive_uart_byte(dut) == ord("A")
+    assert await receive_uart_byte(dut) == ord("B")

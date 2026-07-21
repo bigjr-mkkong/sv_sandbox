@@ -1,6 +1,6 @@
 [submodule "third_party/basejump_stl"]
 	path = third_party/basejump_stl
-	url = git@github.com:bespoke-silicon-group/basejump_stl.git
+	url = https://github.com/bespoke-silicon-group/basejump_stl.git
 [submodule "third_party/taxi"]
 	path = third_party/taxi
-	url = git@github.com:fpganinja/taxi.git
+	url = https://github.com/fpganinja/taxi.git

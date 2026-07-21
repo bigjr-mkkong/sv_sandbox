@@ -1,153 +1,208 @@
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+PROJECT_ROOT := $(abspath .)
+OSS_CAD_SUITE ?= /opt/oss-cad-suite
+VENV ?= $(PROJECT_ROOT)/venv
+
+ifneq ($(wildcard $(OSS_CAD_SUITE)/bin),)
+export PATH := $(OSS_CAD_SUITE)/bin:$(OSS_CAD_SUITE)/py3bin:$(PATH)
+export VERILATOR_ROOT := $(OSS_CAD_SUITE)/share/verilator
+export GHDL_PREFIX := $(OSS_CAD_SUITE)/lib/ghdl
+endif
+
+ifneq ($(wildcard $(VENV)/bin/python3),)
+PYTHON ?= $(VENV)/bin/python3
+else
+PYTHON ?= python3
+endif
+
 TOP := top_module
 TOP_TB := $(TOP)_tb
 
-export BASEJUMP_STL_DIR := $(abspath third_party/basejump_stl)
-export YOSYS_DATDIR := $(shell yosys-config --datdir)
+RTL_MANIFEST := rtl/rtl.flist
+RTL_INPUTS := $(shell sed -e 's,//.*,,' -e '/^[[:space:]]*$$/d' $(RTL_MANIFEST))
+RTL_TEMPLATES := $(filter rtl/%,$(RTL_INPUTS))
+RTL_VENDOR_SOURCES := $(filter-out rtl/%,$(RTL_INPUTS))
+RTL_RENDERED := $(patsubst rtl/%,build/rtl/%,$(RTL_TEMPLATES))
+RTL_SOURCES := $(RTL_VENDOR_SOURCES) $(RTL_RENDERED)
+RTL_FILELIST := build/rtl/rtl.flist
+RTL_STAMP := build/rtl/.prepared
 
-RTL_FILES := .rtl_flist.tmp
+DV_SOURCES := dv/dv_pkg.sv dv/top_module_runner.sv dv/top_module_tb.sv
+SIM_DIR := build/sim
+SIM_BINARY := $(SIM_DIR)/V$(TOP_TB)
 
-# SV2V_ARGS := $(shell \
-#   BASEJUMP_STL_DIR=$(BASEJUMP_STL_DIR) \
-#   python3 misc/convert_filelist.py Makefile _rtl/rtl.flist ; \
-#   python3 misc/third_party_flist.py third_party/taxi/src/lss/rtl/taxi_uart.f \
-# )
+YOSYS_DATDIR = $(shell yosys-config --datdir 2>/dev/null)
+YOSYS_NETLIST := build/yosys/synth.v
+ICE_DIR := build/icebreaker
+ICE_PLL := $(ICE_DIR)/icebreaker_pll.v
+ICE_NETLIST := $(ICE_DIR)/synth.v
+ICE_JSON := $(ICE_DIR)/synth.json
+ICE_SIM_NETLIST := $(ICE_DIR)/synth_sim.v
+ICE_ASC := $(ICE_DIR)/icebreaker.asc
+ICE_BITSTREAM := $(ICE_DIR)/icebreaker.bit
+VIVADO_BITSTREAM := synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
 
-.PHONY:  lint sim-cocotb sv2v gls-cocotb icestorm_icebreaker_gls-cocotb icestorm_icebreaker_program icestorm_icebreaker_flash clean
+.PHONY: help setup doctor prepare lint compile test test-cocotb synth yosys \
+	test-gls icebreaker-pll icebreaker-synth icebreaker-bitstream test-icebreaker-gls \
+	check-vivado-sources vivado-bitstream program-icebreaker flash-icebreaker program-basys3 \
+	check clean FORCE
 
-RENDER_RTL := $(shell ./prepare.sh)
-RTL := $(shell cat $(RTL_FILES))
-SV2V_ARGS := $(shell cat $(RTL_FILES))
+.NOTPARALLEL: check
 
-INCLUDES := $(shell grep '^-I' _rtl/rtl.flist)
-COCOTB_BENCHES += dv.cocotb_benches.topmod_tb0
+help:
+	@echo "SystemVerilog template targets"
+	@echo "  make setup                 Create venv and install Python tools"
+	@echo "  make doctor                Check the local toolchain and submodules"
+	@echo "  make lint                  Lint the rendered RTL with Verilator"
+	@echo "  make compile               Compile the SystemVerilog testbench"
+	@echo "  make test                  Run the SystemVerilog testbench"
+	@echo "  make test-cocotb           Run the RTL cocotb test"
+	@echo "  make synth                 Build a generic Yosys netlist"
+	@echo "  make test-gls              Test the generic post-synthesis netlist"
+	@echo "  make icebreaker-pll        Generate the iCEBreaker PLL source"
+	@echo "  make icebreaker-bitstream  Build the iCEBreaker bitstream"
+	@echo "  make test-icebreaker-gls   Test the iCE40-mapped netlist"
+	@echo "  make check-vivado-sources  Syntax-check the Basys 3 source set"
+	@echo "  make vivado-bitstream      Build the Basys 3 bitstream with Vivado"
+	@echo "  make check                 Run every open-source check above"
+	@echo "  make clean                 Remove generated files"
 
-GLS_RTL := $(shell cat synth/yosys_generic/gls.f | grep -v '^//' )
-GLS_TOP := top_module_sim_gls
-GLS_EXT_ARGS := $(shell cat synth/yosys_generic/gls.f | grep '^-')
+setup:
+	python3 -m venv $(VENV)
+	$(VENV)/bin/python3 -m pip install -r requirements.txt
 
-ICE_RTL := $(shell cat synth/icestorm_icebreaker/gls.f | grep -Ev '^(//|-)')
-ICE_EXT_ARGS := $(shell cat synth/icestorm_icebreaker/gls.f | grep '^-')
-ICE_TOP := icebreaker
-ICE_COCOTB_BENCHES += dv.ICE_cocotb_benches.ice_topmod_tb0
+doctor:
+	@command -v verilator >/dev/null || { echo "error: verilator not found" >&2; exit 1; }
+	@command -v yosys >/dev/null || { echo "error: yosys not found" >&2; exit 1; }
+	@command -v nextpnr-ice40 >/dev/null || { echo "error: nextpnr-ice40 not found" >&2; exit 1; }
+	@command -v icepack >/dev/null || { echo "error: icepack not found" >&2; exit 1; }
+	@command -v icepll >/dev/null || { echo "error: icepll not found" >&2; exit 1; }
+	@command -v cocotb-config >/dev/null || { echo "error: cocotb-config not found" >&2; exit 1; }
+	@$(PYTHON) -c 'import jinja2, serial' || { echo "error: run 'make setup' to install Python dependencies" >&2; exit 1; }
+	@test -f third_party/taxi/src/lss/rtl/taxi_uart.sv || { echo "error: initialize git submodules" >&2; exit 1; }
+	@yosys -m slang -Q -p 'help read_slang' >/dev/null || { echo "error: Yosys Slang plugin not available" >&2; exit 1; }
+	@echo "Toolchain and submodules are ready."
 
-lint:
-	@echo "RTLs:" "$(RTL)"
-	verilator lint/verilator.vlt -f _rtl/rtl.flist -f dv/dv.flist -f IPs.flist --lint-only -Wall --top ${TOP}
+$(RTL_STAMP): prepare.sh misc/rtl_renderer.py rtl/config.json $(RTL_MANIFEST) $(RTL_TEMPLATES)
+	./prepare.sh
+	@touch $@
 
-sim-cocotb:
-	@echo "RTLs:" "$(RTL)"
-	@echo "INCLUDEs:" "$(INCLUDES)"
-	@echo "TOPLEVEL:" $(TOP)
-	@echo "COCOTB BENCHES:" "$(COCOTB_BENCHES)"
-	@make -f Makefile.cocotb \
-		VERILOG_SOURCES="$(RTL)" \
-		INCLUDES="$(INCLUDES)" \
-		TOPLEVEL=$(TOP) \
-		MODULE="$(COCOTB_BENCHES)"
+$(RTL_RENDERED) $(RTL_FILELIST): $(RTL_STAMP)
 
-	# @echo "sim target not usable in this Makefile, please use sim-cocotb instead"
-	# @exit 1
-sim:
-	@echo "RTLs:" "$(RTL)"
-	verilator lint/verilator.vlt --Mdir ${TOP_TB}_$@_dir -f _rtl/rtl.flist -f dv/pre_synth.flist -f dv/dv.flist -f IPs.flist --binary -Wno-fatal --top ${TOP_TB} --trace
-	./${TOP_TB}_$@_dir/V${TOP_TB} +verilator+rand+reset+2
+prepare: $(RTL_STAMP)
 
-SV2V_DIR := ./sv2v
+lint: $(RTL_STAMP) $(RTL_SOURCES) lint/verilator.vlt
+	verilator lint/verilator.vlt --lint-only --Wall --top-module $(TOP) $(RTL_SOURCES)
 
-RTL_BASENAME := $(notdir $(RTL))
+$(SIM_BINARY): $(RTL_STAMP) $(RTL_SOURCES) $(DV_SOURCES) dv/dv.flist lint/verilator.vlt
+	@mkdir -p $(SIM_DIR)
+	verilator lint/verilator.vlt --Mdir $(SIM_DIR) --binary --top-module $(TOP_TB) \
+		$(RTL_SOURCES) -f dv/dv.flist -o V$(TOP_TB)
 
-VERILOG_FILES := $(patsubst %.sv, $(SV2V_DIR)/%.v, $(SV_BASENAME))
+compile: $(SIM_BINARY)
 
-sv2v:
-	@mkdir -p $(SV2V_DIR)
-	@$(foreach svfile, $(RTL), \
-		sv2v $(svfile) > $(SV2V_DIR)/$(notdir $(basename $(svfile))).v; \
-		echo "Converted $(svfile)";)
+test: $(SIM_BINARY)
+	$(SIM_BINARY) +verilator+rand+reset+2
 
-synth/build/rtl.sv2v.v: ${RTL} _rtl/rtl.flist
-	mkdir -p $(dir $@)
-	sv2v ${SV2V_ARGS} -w $@ -DSYNTHESIS
+test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmod_tb0.py
+	$(MAKE) -f Makefile.cocotb \
+		SIM_BUILD=build/cocotb-rtl \
+		COCOTB_RESULTS_FILE=$(abspath build/cocotb-rtl/results.xml) \
+		USER_SIM_ARGS="--trace-file $(abspath build/cocotb-rtl/dump.vcd)" \
+		VERILOG_SOURCES="$(RTL_SOURCES)" \
+		COCOTB_TOPLEVEL=$(TOP) \
+		COCOTB_TEST_MODULES=dv.cocotb_benches.topmod_tb0
 
-gls: synth/yosys_generic/build/synth.v
-	# @echo "gls target not usable in this Makefile, please use gls-cocotb instead"
-	# @exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/yosys_generic/gls.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
-	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
+$(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
+	@mkdir -p $(dir $@)
+	yosys -m slang -p 'tcl synth/yosys_generic/yosys.tcl $(RTL_FILELIST) $@' \
+		-l build/yosys/yosys.log
 
-gls-cocotb: synth/yosys_generic/build/synth.v
-	@echo "Files 2 check: " "$(GLS_RTL)"
-	@make -f Makefile.cocotb \
-		VERILOG_SOURCES="$(GLS_RTL)" \
-		TOPLEVEL=$(GLS_TOP) \
-		EXTRA_ARGS="$(GLS_EXTRA_ARGS)" \
-		MODULE="$(COCOTB_BENCHES)"
+synth yosys: $(YOSYS_NETLIST)
 
-synth/yosys_generic/build/synth.v: synth/build/rtl.sv2v.v synth/yosys_generic/yosys.tcl
-	mkdir -p $(dir $@)
-	yosys -p 'tcl synth/yosys_generic/yosys.tcl synth/build/rtl.sv2v.v' -l synth/yosys_generic/build/yosys.log
+test-gls: $(YOSYS_NETLIST) Makefile.cocotb dv/cocotb_benches/topmod_tb0.py
+	$(MAKE) -f Makefile.cocotb \
+		SIM_BUILD=build/cocotb-gls \
+		COCOTB_RESULTS_FILE=$(abspath build/cocotb-gls/results.xml) \
+		USER_SIM_ARGS="--trace-file $(abspath build/cocotb-gls/dump.vcd)" \
+		VERILOG_SOURCES="$(YOSYS_DATDIR)/simlib.v $(YOSYS_NETLIST)" \
+		USER_COMPILE_ARGS="lint/verilator.vlt --bbox-unsup" \
+		COCOTB_TOPLEVEL=$(TOP) \
+		COCOTB_TEST_MODULES=dv.cocotb_benches.topmod_tb0
 
-icestorm_icebreaker_gls: synth/icestorm_icebreaker/build/synth.v
-	# @echo "icestorm_icebreaker_gls target not usable in this Makefile, please use icestorm_icebreaker_gls-cocotb instead"
-	# @exit 1
-	verilator lint/verilator.vlt --Mdir ${TOP}_$@_dir -f synth/icestorm_icebreaker/gls.f -f dv/dv.flist --binary -Wno-fatal --top ${TOP}
-	./${TOP}_$@_dir/V${TOP} +verilator+rand+reset+2
+FORCE:
 
+$(ICE_PLL): FORCE
+	@mkdir -p $(dir $@)
+	icepll -q -i 12 -o 48 -p -m -n icebreaker_pll -f $@
 
-icestorm_icebreaker_gls-cocotb: synth/icestorm_icebreaker/build/synth.v
-	@echo "Files 2 check: " "$(ICE_RTL)"
-	@echo "Top Module: " "$(ICE_TOP)"
-	@echo "Extra Args: " "$(ICE_EXT_ARGS)"
-	@make -f Makefile.cocotb \
-		VERILOG_SOURCES="$(ICE_RTL)" \
-		TOPLEVEL=$(ICE_TOP) \
-		EXTRA_ARGS="$(ICE_EXT_ARGS) --trace" \
-		MODULE="$(ICE_COCOTB_BENCHES)"
+icebreaker-pll: $(ICE_PLL)
 
-synth/icestorm_icebreaker/build/synth.v synth/icestorm_icebreaker/build/synth.json: synth/build/rtl.sv2v.v synth/icestorm_icebreaker/icebreaker.v synth/icestorm_icebreaker/yosys.tcl
-	mkdir -p $(dir $@)
-	yosys -p 'tcl synth/icestorm_icebreaker/yosys.tcl' -l synth/icestorm_icebreaker/build/yosys.log
+$(ICE_NETLIST) $(ICE_JSON) &: $(RTL_STAMP) $(RTL_SOURCES) \
+		$(ICE_PLL) synth/icestorm_icebreaker/icebreaker.v \
+		synth/icestorm_icebreaker/yosys.tcl
+	@mkdir -p $(ICE_DIR)
+	yosys -m slang -p 'tcl synth/icestorm_icebreaker/yosys.tcl hardware $(RTL_FILELIST) synth/icestorm_icebreaker/icebreaker.v $(ICE_NETLIST) $(ICE_PLL) $(YOSYS_DATDIR)/ice40/cells_sim.v $(ICE_JSON)' \
+		-l $(ICE_DIR)/yosys.log
 
-synth/icestorm_icebreaker/build/icebreaker.asc: synth/icestorm_icebreaker/build/synth.json synth/icestorm_icebreaker/nextpnr.py synth/icestorm_icebreaker/netpnr.pcf
-	nextpnr-ice40 \
-	 --json synth/icestorm_icebreaker/build/synth.json \
-	 --up5k \
-	 --package sg48 \
-	 --pre-pack synth/icestorm_icebreaker/nextpnr.py \
-	 --pcf synth/icestorm_icebreaker/netpnr.pcf \
-	 --pcf-allow-unconstrained \
-	 --asc $@
+icebreaker-synth: $(ICE_NETLIST) $(ICE_JSON)
 
-%.bit: %.asc
+$(ICE_SIM_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) \
+		synth/icestorm_icebreaker/icebreaker.v synth/icestorm_icebreaker/yosys.tcl
+	@mkdir -p $(ICE_DIR)
+	yosys -m slang -p 'tcl synth/icestorm_icebreaker/yosys.tcl simulation $(RTL_FILELIST) synth/icestorm_icebreaker/icebreaker.v $@' \
+		-l $(ICE_DIR)/yosys-sim.log
+
+$(ICE_ASC): $(ICE_JSON) synth/icestorm_icebreaker/netpnr.pcf synth/icestorm_icebreaker/nextpnr.py
+	nextpnr-ice40 --json $(ICE_JSON) --up5k --package sg48 \
+		--pre-pack synth/icestorm_icebreaker/nextpnr.py \
+		--pcf synth/icestorm_icebreaker/netpnr.pcf --pcf-allow-unconstrained --asc $@
+
+$(ICE_BITSTREAM): $(ICE_ASC)
 	icepack $< $@
 
-icestorm_icebreaker_program: synth/icestorm_icebreaker/build/icebreaker.bit
-	sudo $(shell which openFPGALoader) -b ice40_generic $<
+icebreaker-bitstream: $(ICE_BITSTREAM)
 
-icestorm_icebreaker_flash: synth/icestorm_icebreaker/build/icebreaker.bit
-	sudo $(shell which openFPGALoader) -f -b ice40_generic $<
+test-icebreaker-gls: $(ICE_SIM_NETLIST) Makefile.cocotb \
+		dv/ICE_cocotb_benches/ice_topmod_tb0.py
+	$(MAKE) -f Makefile.cocotb \
+		SIM_BUILD=build/cocotb-icebreaker-gls \
+		COCOTB_RESULTS_FILE=$(abspath build/cocotb-icebreaker-gls/results.xml) \
+		USER_SIM_ARGS="--trace-file $(abspath build/cocotb-icebreaker-gls/dump.vcd)" \
+		VERILOG_SOURCES="$(YOSYS_DATDIR)/ice40/cells_sim.v $(ICE_SIM_NETLIST)" \
+		USER_COMPILE_ARGS="lint/verilator.vlt -DNO_ICE40_DEFAULT_ASSIGNMENTS" \
+		COCOTB_TOPLEVEL=icebreaker \
+		COCOTB_TEST_MODULES=dv.ICE_cocotb_benches.ice_topmod_tb0
 
-synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit: synth/build/rtl.sv2v.v synth/vivado_basys3/basys3.sv synth/vivado_basys3/Basys3_Master.xdc synth/vivado_basys3/constraints.xdc synth/vivado_basys3/vivado.tcl
-	rm -rf synth/vivado_basys3/build/basys3
-	mkdir -p synth/vivado_basys3/build
-	cd synth/vivado_basys3/build && \
-	 vivado -quiet -nolog -nojournal -notrace -mode tcl \
-	  -source ../vivado.tcl
+check-vivado-sources: $(RTL_STAMP) $(RTL_SOURCES) synth/vivado_basys3/basys3.sv
+	yosys -m slang -Q -p 'read_slang --lint-only --ignore-unknown-modules --top basys3 -f $(RTL_FILELIST) synth/vivado_basys3/basys3.sv'
 
-vivado_basys3_program: synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
-	sudo $(shell which openFPGALoader) -b vivado_basys3 $<
+$(VIVADO_BITSTREAM): $(RTL_STAMP) $(RTL_SOURCES) synth/vivado_basys3/basys3.sv \
+		synth/vivado_basys3/Basys3_Master.xdc synth/vivado_basys3/constraints.xdc \
+		synth/vivado_basys3/vivado.tcl
+	@command -v vivado >/dev/null || { echo "error: Vivado is required for this target" >&2; exit 1; }
+	vivado -quiet -nolog -nojournal -notrace -mode batch \
+		-source synth/vivado_basys3/vivado.tcl -tclargs $(abspath $(RTL_SOURCES))
+
+vivado-bitstream: $(VIVADO_BITSTREAM)
+
+program-icebreaker: $(ICE_BITSTREAM)
+	openFPGALoader -b ice40_generic $<
+
+flash-icebreaker: $(ICE_BITSTREAM)
+	openFPGALoader -f -b ice40_generic $<
+
+program-basys3: $(VIVADO_BITSTREAM)
+	openFPGALoader -b basys3 $<
+
+check: doctor lint test test-cocotb synth test-gls icebreaker-bitstream \
+	test-icebreaker-gls check-vivado-sources
 
 clean:
-	rm -rf \
-	*.memh *.memb \
-	*sim_dir *gls_dir \
-	dump.vcd dump.fst \
-	synth/build \
-	synth/yosys_generic/build \
-	synth/icestorm_icebreaker/build \
-	synth/vivado_basys3/build \
-	sim_build \
-	results.xml \
-	sv2v/ \
-	IPs.flist \
-	_rtl \
-	$(RTL_FILES) 
+	rm -rf build synth/vivado_basys3/build _rtl sim_build \
+		top_module_tb_sim_dir top_module_tb_gls_dir top_module_gls_dir \
+		__pycache__ misc/__pycache__ dv/cocotb_benches/__pycache__ \
+		dv/ICE_cocotb_benches/__pycache__
+	rm -f dump.vcd dump.fst results.xml IPs.flist .rtl_flist.tmp
