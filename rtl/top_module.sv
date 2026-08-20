@@ -21,7 +21,7 @@ module top_module (
         .m_axis_tx_tready_i(main_tx_tready_i)
     );
 
-{% if UART0.ENABLE %}
+{% if UART0 is defined and UART0.ENABLE %}
     taxi_axis_if #(.DATA_W({{ UART0.AXI_DATAW }})) uart_rx_axis();
     taxi_axis_if #(.DATA_W({{ UART0.AXI_DATAW }})) uart_tx_axis();
 

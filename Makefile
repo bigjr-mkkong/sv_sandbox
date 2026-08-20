@@ -28,6 +28,8 @@ RTL_RENDERED := $(patsubst rtl/%,build/rtl/%,$(RTL_TEMPLATES))
 RTL_SOURCES := $(RTL_VENDOR_SOURCES) $(RTL_RENDERED)
 RTL_FILELIST := build/rtl/rtl.flist
 RTL_STAMP := build/rtl/.prepared
+RTL_TREE_INPUTS := $(shell find rtl -type f)
+UNIT_TEST_MANIFEST := build/.unit-test.json
 
 DV_SOURCES := dv/dv_pkg.sv dv/top_module_runner.sv dv/top_module_tb.sv
 SIM_DIR := build/sim
@@ -44,7 +46,7 @@ ICE_ASC := $(ICE_DIR)/icebreaker.asc
 ICE_BITSTREAM := $(ICE_DIR)/icebreaker.bit
 VIVADO_BITSTREAM := synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
 
-.PHONY: help setup doctor prepare lint compile test test-cocotb synth yosys \
+.PHONY: help setup doctor prepare lint compile test test-cocotb unit_test synth yosys \
 	test-gls icebreaker-pll icebreaker-synth icebreaker-bitstream test-icebreaker-gls \
 	check-vivado-sources vivado-bitstream program-icebreaker flash-icebreaker program-basys3 \
 	check clean FORCE
@@ -59,6 +61,7 @@ help:
 	@echo "  make compile               Compile the SystemVerilog testbench"
 	@echo "  make test                  Run the SystemVerilog testbench"
 	@echo "  make test-cocotb           Run the RTL cocotb test"
+	@echo "  make unit_test             Run registered RTL unit tests"
 	@echo "  make synth                 Build a generic Yosys netlist"
 	@echo "  make test-gls              Test the generic post-synthesis netlist"
 	@echo "  make icebreaker-pll        Generate the iCEBreaker PLL source"
@@ -85,13 +88,13 @@ doctor:
 	@yosys -m slang -Q -p 'help read_slang' >/dev/null || { echo "error: Yosys Slang plugin not available" >&2; exit 1; }
 	@echo "Toolchain and submodules are ready."
 
-$(RTL_STAMP): prepare.sh misc/rtl_renderer.py rtl/config.json $(RTL_MANIFEST) $(RTL_TEMPLATES)
+$(RTL_STAMP) $(UNIT_TEST_MANIFEST) &: prepare.sh misc/rtl_renderer.py $(RTL_TREE_INPUTS)
 	./prepare.sh
-	@touch $@
+	@touch $(RTL_STAMP)
 
 $(RTL_RENDERED) $(RTL_FILELIST): $(RTL_STAMP)
 
-prepare: $(RTL_STAMP)
+prepare: $(RTL_STAMP) $(UNIT_TEST_MANIFEST)
 
 lint: $(RTL_STAMP) $(RTL_SOURCES) lint/verilator.vlt
 	verilator lint/verilator.vlt --lint-only --Wall --top-module $(TOP) $(RTL_SOURCES)
@@ -114,6 +117,9 @@ test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmo
 		VERILOG_SOURCES="$(RTL_SOURCES)" \
 		COCOTB_TOPLEVEL=$(TOP) \
 		COCOTB_TEST_MODULES=dv.cocotb_benches.topmod_tb0
+
+unit_test: $(UNIT_TEST_MANIFEST) misc/unit-test.py Makefile.cocotb
+	$(PYTHON) misc/unit-test.py --manifest $(UNIT_TEST_MANIFEST) --rtl-dir build/rtl
 
 $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
 	@mkdir -p $(dir $@)
@@ -197,7 +203,7 @@ flash-icebreaker: $(ICE_BITSTREAM)
 program-basys3: $(VIVADO_BITSTREAM)
 	openFPGALoader -b basys3 $<
 
-check: doctor lint test test-cocotb synth test-gls icebreaker-bitstream \
+check: doctor lint unit_test test test-cocotb synth test-gls icebreaker-bitstream \
 	test-icebreaker-gls check-vivado-sources
 
 clean:
