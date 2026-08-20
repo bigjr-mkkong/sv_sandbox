@@ -46,7 +46,7 @@ ICE_ASC := $(ICE_DIR)/icebreaker.asc
 ICE_BITSTREAM := $(ICE_DIR)/icebreaker.bit
 VIVADO_BITSTREAM := synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
 
-.PHONY: help setup doctor prepare lint compile test test-cocotb unit_test synth yosys \
+.PHONY: help setup doctor prepare lint compile test test-cocotb unit-test synth yosys \
 	test-gls icebreaker-pll icebreaker-synth icebreaker-bitstream test-icebreaker-gls \
 	check-vivado-sources vivado-bitstream program-icebreaker flash-icebreaker program-basys3 \
 	check clean FORCE
@@ -61,7 +61,7 @@ help:
 	@echo "  make compile               Compile the SystemVerilog testbench"
 	@echo "  make test                  Run the SystemVerilog testbench"
 	@echo "  make test-cocotb           Run the RTL cocotb test"
-	@echo "  make unit_test             Run registered RTL unit tests"
+	@echo "  make unit-test             Run registered RTL unit tests"
 	@echo "  make synth                 Build a generic Yosys netlist"
 	@echo "  make test-gls              Test the generic post-synthesis netlist"
 	@echo "  make icebreaker-pll        Generate the iCEBreaker PLL source"
@@ -118,7 +118,7 @@ test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmo
 		COCOTB_TOPLEVEL=$(TOP) \
 		COCOTB_TEST_MODULES=dv.cocotb_benches.topmod_tb0
 
-unit_test: $(UNIT_TEST_MANIFEST) misc/unit-test.py Makefile.cocotb
+unit-test: $(UNIT_TEST_MANIFEST) misc/unit-test.py Makefile.cocotb
 	$(PYTHON) misc/unit-test.py --manifest $(UNIT_TEST_MANIFEST) --rtl-dir build/rtl
 
 $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
@@ -203,7 +203,7 @@ flash-icebreaker: $(ICE_BITSTREAM)
 program-basys3: $(VIVADO_BITSTREAM)
 	openFPGALoader -b basys3 $<
 
-check: doctor lint unit_test test test-cocotb synth test-gls icebreaker-bitstream \
+check: doctor lint unit-test test test-cocotb synth test-gls icebreaker-bitstream \
 	test-icebreaker-gls check-vivado-sources
 
 clean:
