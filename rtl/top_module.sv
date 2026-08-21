@@ -7,18 +7,12 @@ module top_module (
     output logic txd_o
 );
 
-    logic [config_pkg::MAIN_DATA_WIDTH-1:0] main_tx_tdata_o;
-    logic                                   main_tx_tvalid_o;
-    logic                                   main_tx_tready_i;
-
     main_module #(
-        .DATA_WIDTH(config_pkg::MAIN_DATA_WIDTH)
+        .ADDR_WIDTH(config_pkg::ADDR_WIDTH),
+        .DATA_WIDTH(config_pkg::DATA_WIDTH)
     ) main_module_inst (
         .clk_i(clk_i),
-        .rst_ni(rst_ni),
-        .m_axis_tx_tdata_o(main_tx_tdata_o),
-        .m_axis_tx_tvalid_o(main_tx_tvalid_o),
-        .m_axis_tx_tready_i(main_tx_tready_i)
+        .rst_ni(rst_ni)
     );
 
 {% if UART0 is defined and UART0.ENABLE %}
@@ -45,21 +39,16 @@ module top_module (
         .prescale(UART_PRESCALE)
     );
 
-    assign uart_tx_axis.tdata = {{ UART0.AXI_DATAW }}'(main_tx_tdata_o);
-    assign uart_tx_axis.tvalid = main_tx_tvalid_o;
-    assign main_tx_tready_i = uart_tx_axis.tready;
+    // The cache-only example does not currently produce UART traffic.
+    assign uart_tx_axis.tdata = '0;
+    assign uart_tx_axis.tvalid = 1'b0;
     assign uart_rx_axis.tready = 1'b1;
 {% else %}
     // Keep the UART output in its idle state when this instance is disabled.
     assign txd_o = 1'b1;
 
-    // An absent transport applies backpressure so the main retains its
-    // current output instead of silently discarding transfers.
-    assign main_tx_tready_i = 1'b0;
-
-    // Preserve the same public interface for board wrappers and consume the
-    // disconnected transport signals for lint purposes.
-    wire _unused_ok = &{1'b0, rxd_i, main_tx_tdata_o, main_tx_tvalid_o};
+    // Consume the otherwise unused receive pin for lint purposes.
+    wire _unused_ok = &{1'b0, rxd_i};
 {% endif %}
 
 endmodule

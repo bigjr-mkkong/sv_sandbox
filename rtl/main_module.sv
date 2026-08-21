@@ -1,36 +1,48 @@
 `timescale 1ns / 1ps
 
 module main_module #(
-    parameter int unsigned DATA_WIDTH = 8
+    parameter int unsigned ADDR_WIDTH     = config_pkg::ADDR_WIDTH,
+    parameter int unsigned DATA_WIDTH     = config_pkg::DATA_WIDTH,
+    parameter int unsigned DATA_PER_LINE  = 8,
+    parameter int unsigned CACHE_SIZE_KIB = 16
 ) (
     input  logic                  clk_i,
-    input  logic                  rst_ni,
-    output logic [DATA_WIDTH-1:0] m_axis_tx_tdata_o,
-    output logic                  m_axis_tx_tvalid_o,
-    input  logic                  m_axis_tx_tready_i
+    input  logic                  rst_ni
 );
 
-    logic [DATA_WIDTH-1:0] data_r;
-    logic [DATA_WIDTH-1:0] data_next;
+    taxi_axil_if #(
+        .DATA_W(DATA_WIDTH),
+        .ADDR_W(ADDR_WIDTH)
+    ) upstream_cache_axil_inst();
 
-    always_ff @(posedge clk_i) begin
-        if (!rst_ni) begin
-            data_r <= DATA_WIDTH'(8'h41);
-        end else begin
-            data_r <= data_next;
-        end
-    end
+    taxi_axil_if #(
+        .DATA_W(DATA_WIDTH * DATA_PER_LINE),
+        .ADDR_W(ADDR_WIDTH)
+    ) cache_dram_axil_inst();
 
-    always_comb begin
-        m_axis_tx_tdata_o = data_r;
-        m_axis_tx_tvalid_o = 1'b1;
+    dumb_dram_1rw #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DATA_PER_LINE(DATA_PER_LINE)
+    ) dumb_dram_1rw_inst (
+        .clk_i(clk_i),
+        .rst_ni(rst_ni),
+        .s_axil_wr(cache_dram_axil_inst),
+        .s_axil_rd(cache_dram_axil_inst)
+    );
 
-        data_next = data_r;
-        if (m_axis_tx_tready_i) begin
-            data_next = data_r >= DATA_WIDTH'(8'h5a)
-                ? DATA_WIDTH'(8'h41)
-                : data_r + DATA_WIDTH'(1);
-        end
-    end
+    simple_cache_1rw #(
+        .CACHE_SIZE_KIB(CACHE_SIZE_KIB),
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DATA_PER_LINE(DATA_PER_LINE)
+    ) simple_cache_1rw_inst (
+        .clk_i(clk_i),
+        .rst_ni(rst_ni),
+        .s_axil_wr(upstream_cache_axil_inst),
+        .s_axil_rd(upstream_cache_axil_inst),
+        .m_axil_wr(cache_dram_axil_inst),
+        .m_axil_rd(cache_dram_axil_inst)
+    );
 
 endmodule
