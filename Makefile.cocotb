@@ -1,6 +1,12 @@
 SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
 
+ifeq ($(SIM),verilator)
+PROJECT_CPP_SOURCES := $(sort $(wildcard $(dir $(abspath $(lastword $(MAKEFILE_LIST))))cpp/*.cpp))
+override VERILOG_SOURCES += $(PROJECT_CPP_SOURCES)
+override CUSTOM_COMPILE_DEPS += $(PROJECT_CPP_SOURCES)
+endif
+
 COMPILE_ARGS += -Wno-fatal
 COMPILE_ARGS += $(USER_COMPILE_ARGS)
 EXTRA_ARGS += --trace --trace-structs

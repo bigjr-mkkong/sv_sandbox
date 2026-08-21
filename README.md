@@ -110,6 +110,11 @@ independent directory under `build/unit-test/`. The command uses the Python
 environment created by `make setup`, so no manual virtual-environment activation
 is required.
 
+For Verilator simulations, `Makefile.cocotb` automatically compiles every
+`*.cpp` file directly under `cpp/`. This directory is intended for DPI-C models
+and other C++ simulation support; its contents are not part of the RTL flist or
+synthesis inputs.
+
 ## Configuration and source files
 
 Edit [`rtl/config.json`](rtl/config.json) to configure rendered third-party
