@@ -1,13 +1,14 @@
+import itertools
 import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import FallingEdge, RisingEdge, Timer
+from cocotb.triggers import RisingEdge
+from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiLiteRam, AxiResp
 
 
 CLOCK_PERIOD_NS = 10
-
-# These mirror the DUT's default parameters used by the standalone invocation.
+TEST_TIMEOUT_US = 250
 ADDR_WIDTH = 64
 DATA_WIDTH = 64
 DATA_BYTES = DATA_WIDTH // 8
@@ -17,9 +18,11 @@ LINE_BYTES = DATA_BYTES * DATA_PER_LINE
 ROW_COUNT = CACHE_SIZE_KIB * 1024 // LINE_BYTES
 OFFSET_BITS = LINE_BYTES.bit_length() - 1
 INDEX_BITS = ROW_COUNT.bit_length() - 1
+RAM_SIZE = 1 << 20
 
-RSP_OK = 0
-RSP_MISS = 1
+
+def cycle_pause(pattern=(1, 1, 1, 0)):
+    return itertools.cycle(pattern)
 
 
 def cache_address(tag, index, word=0):
@@ -33,290 +36,234 @@ def cache_address(tag, index, word=0):
     )
 
 
-async def settle():
-    """Move past the edge-triggered region before sampling combinational I/O."""
-    await Timer(1, unit="ps")
+def line_address(address):
+    return address & ~(LINE_BYTES - 1)
 
 
-async def start_and_reset(dut):
-    cocotb.start_soon(Clock(dut.clk_i, CLOCK_PERIOD_NS, unit="ns").start())
-
-    dut.rst_ni.value = 0
-    dut.req_val_i.value = 0
-    dut.req_addr_i.value = 0
-    dut.req_data_i.value = 0
-    dut.req_rw_flag_i.value = 0
-    dut.rsp_rdy_i.value = 0
-
-    for _ in range(10):
-        await RisingEdge(dut.clk_i)
-
-    await FallingEdge(dut.clk_i)
-    dut.rst_ni.value = 1
-    await RisingEdge(dut.clk_i)
-    await settle()
-
-    assert int(dut.req_rdy_o.value) == 1
-    assert int(dut.rsp_val_o.value) == 0
+def pack_line(words):
+    assert len(words) == DATA_PER_LINE
+    return b"".join(value.to_bytes(DATA_BYTES, "little") for value in words)
 
 
-async def issue_request(dut, address, *, write=False, data=0):
-    """Hold a request until the DUT accepts it."""
-    await FallingEdge(dut.clk_i)
-    await settle()
-
-    dut.req_addr_i.value = address
-    dut.req_data_i.value = data
-    dut.req_rw_flag_i.value = int(write)
-    dut.req_val_i.value = 1
-
-    while True:
-        await settle()
-        if int(dut.req_rdy_o.value):
-            break
-        await FallingEdge(dut.clk_i)
-
-    await RisingEdge(dut.clk_i)
-    await FallingEdge(dut.clk_i)
-    dut.req_val_i.value = 0
-    await settle()
+def unpack_line(data):
+    assert len(data) == LINE_BYTES
+    return [
+        int.from_bytes(data[offset : offset + DATA_BYTES], "little")
+        for offset in range(0, LINE_BYTES, DATA_BYTES)
+    ]
 
 
-async def receive_response(
-    dut,
-    *,
-    expected_state,
-    expected_data=0,
-    stall_cycles=0,
-):
-    """Check a response, optionally applying response backpressure."""
-    while not int(dut.rsp_val_o.value):
-        await FallingEdge(dut.clk_i)
-        await settle()
+class CacheTB:
+    def __init__(self, dut):
+        self.dut = dut
+        cocotb.start_soon(Clock(dut.clk_i, CLOCK_PERIOD_NS, unit="ns").start())
 
-    for _ in range(stall_cycles):
-        assert int(dut.req_rdy_o.value) == 0
-        assert int(dut.rsp_val_o.value) == 1
-        assert int(dut.rsp_state_o.value) == expected_state
-        assert int(dut.rsp_data_o.value) == expected_data
-        await RisingEdge(dut.clk_i)
-        await FallingEdge(dut.clk_i)
-        await settle()
-
-    assert int(dut.rsp_state_o.value) == expected_state
-    assert int(dut.rsp_data_o.value) == expected_data
-
-    dut.rsp_rdy_i.value = 1
-    await RisingEdge(dut.clk_i)
-    await FallingEdge(dut.clk_i)
-    dut.rsp_rdy_i.value = 0
-    await settle()
-
-    assert int(dut.rsp_val_o.value) == 0
-    assert int(dut.req_rdy_o.value) == 1
-
-
-async def transact(
-    dut,
-    address,
-    *,
-    write=False,
-    data=0,
-    expected_state=RSP_OK,
-    expected_data=0,
-    stall_cycles=0,
-):
-    await issue_request(dut, address, write=write, data=data)
-    await receive_response(
-        dut,
-        expected_state=expected_state,
-        expected_data=expected_data,
-        stall_cycles=stall_cycles,
-    )
-
-
-async def drive_request_stream(dut, requests):
-    """Keep requests pending continuously and advance on each handshake."""
-    for address, is_write, data in requests:
-        await FallingEdge(dut.clk_i)
-        await settle()
-        dut.req_addr_i.value = address
-        dut.req_data_i.value = data
-        dut.req_rw_flag_i.value = int(is_write)
-        dut.req_val_i.value = 1
-
-        while not int(dut.req_rdy_o.value):
-            await FallingEdge(dut.clk_i)
-            await settle()
-
-        await RisingEdge(dut.clk_i)
-
-    await FallingEdge(dut.clk_i)
-    dut.req_val_i.value = 0
-
-
-async def check_response_stream(dut, expected_responses):
-    """Consume and check responses while the request producer keeps running."""
-    dut.rsp_rdy_i.value = 1
-
-    for expected_state, expected_data in expected_responses:
-        while True:
-            await FallingEdge(dut.clk_i)
-            await settle()
-            if int(dut.rsp_val_o.value):
-                break
-
-        assert int(dut.rsp_state_o.value) == expected_state
-        assert int(dut.rsp_data_o.value) == expected_data
-        await RisingEdge(dut.clk_i)
-
-    await FallingEdge(dut.clk_i)
-    dut.rsp_rdy_i.value = 0
-
-
-@cocotb.test()
-async def reset_invalidates_every_cache_line(dut):
-    """Every index must report a miss after reset."""
-    await start_and_reset(dut)
-
-    for index in range(ROW_COUNT):
-        await transact(
-            dut,
-            cache_address(tag=0, index=index),
-            expected_state=RSP_MISS,
+        self.master = AxiLiteMaster(
+            AxiLiteBus.from_entity(dut.s_axil),
+            dut.clk_i,
+            dut.rst_ni,
+            reset_active_level=False,
+        )
+        self.ram = AxiLiteRam(
+            AxiLiteBus.from_entity(dut.m_axil),
+            dut.clk_i,
+            dut.rst_ni,
+            reset_active_level=False,
+            size=RAM_SIZE,
         )
 
+    async def reset(self):
+        self.dut.rst_ni.value = 0
+        for _ in range(10):
+            await RisingEdge(self.dut.clk_i)
+        self.dut.rst_ni.value = 1
+        for _ in range(2):
+            await RisingEdge(self.dut.clk_i)
 
-@cocotb.test()
-async def request_fields_are_ignored_without_valid(dut):
-    """Changing a write request while req_val_i is low must do nothing."""
-    await start_and_reset(dut)
-    address = cache_address(tag=2, index=11, word=3)
+    async def read_word(self, address):
+        response = await self.master.read(address, DATA_BYTES)
+        assert response.resp == AxiResp.OKAY
+        assert len(response.data) == DATA_BYTES
+        return int.from_bytes(response.data, "little")
 
-    await FallingEdge(dut.clk_i)
-    dut.req_addr_i.value = address
-    dut.req_data_i.value = 0xDEADBEEF01234567
-    dut.req_rw_flag_i.value = 1
-
-    for _ in range(5):
-        await RisingEdge(dut.clk_i)
-        await settle()
-        assert int(dut.req_rdy_o.value) == 1
-        assert int(dut.rsp_val_o.value) == 0
-
-    await transact(dut, address, expected_state=RSP_MISS)
+    async def write_word(self, address, value):
+        response = await self.master.write(
+            address,
+            value.to_bytes(DATA_BYTES, "little"),
+        )
+        assert response.resp == AxiResp.OKAY
 
 
-@cocotb.test()
-async def single_write_then_read_hits(dut):
-    """A write allocates the line and a subsequent read returns its data."""
-    await start_and_reset(dut)
-    address = cache_address(tag=1, index=7, word=5)
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def reset_invalidates_every_cache_line(dut):
+    """Every index must fetch the zero-initialized backing line after reset."""
+    tb = CacheTB(dut)
+    await tb.reset()
+
+    for index in range(ROW_COUNT):
+        assert await tb.read_word(cache_address(tag=0, index=index)) == 0
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def read_miss_fills_the_complete_line(dut):
+    """One downstream 512-bit read populates every word in the cache line."""
+    tb = CacheTB(dut)
+    await tb.reset()
+    base = line_address(cache_address(tag=2, index=11))
+    original = [0x1000 + index for index in range(DATA_PER_LINE)]
+    replacement = [0x9000 + index for index in range(DATA_PER_LINE)]
+    tb.ram.write(base, pack_line(original))
+
+    assert await tb.read_word(base + 3 * DATA_BYTES) == original[3]
+
+    # Alter backing memory after the fill; every subsequent word must still hit.
+    tb.ram.write(base, pack_line(replacement))
+    for word, expected in enumerate(original):
+        assert await tb.read_word(base + word * DATA_BYTES) == expected
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def write_miss_allocates_without_downstream_access(dut):
+    """A write miss creates a dirty cache line but leaves memory untouched."""
+    tb = CacheTB(dut)
+    await tb.reset()
+    base = line_address(cache_address(tag=1, index=7))
+    backing = [0xABC000 + index for index in range(DATA_PER_LINE)]
     value = 0x0123456789ABCDEF
+    tb.ram.write(base, pack_line(backing))
 
-    await transact(dut, address, write=True, data=value)
-    await transact(dut, address, expected_data=value)
+    await tb.write_word(base + 5 * DATA_BYTES, value)
+
+    assert unpack_line(tb.ram.read(base, LINE_BYTES)) == backing
+    assert await tb.read_word(base + 5 * DATA_BYTES) == value
+    assert await tb.read_word(base + 2 * DATA_BYTES) == 0
 
 
-@cocotb.test()
-async def newer_tag_replaces_same_index(dut):
-    """A later write with a different tag evicts the previous cache line."""
-    await start_and_reset(dut)
-    old_address = cache_address(tag=1, index=19, word=2)
-    new_address = cache_address(tag=5, index=19, word=2)
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def dirty_victim_is_written_back_as_one_line(dut):
+    """Replacing a dirty tag writes all 512 bits before installing the new tag."""
+    tb = CacheTB(dut)
+    await tb.reset()
+    old_base = line_address(cache_address(tag=1, index=19))
+    new_base = line_address(cache_address(tag=5, index=19))
+    old_backing = [0x1100 + index for index in range(DATA_PER_LINE)]
+    new_backing = [0x5500 + index for index in range(DATA_PER_LINE)]
     old_value = 0x1111222233334444
     new_value = 0xAAAABBBBCCCCDDDD
+    tb.ram.write(old_base, pack_line(old_backing))
+    tb.ram.write(new_base, pack_line(new_backing))
 
-    await transact(dut, old_address, write=True, data=old_value)
-    await transact(dut, new_address, write=True, data=new_value)
-    await transact(dut, new_address, expected_data=new_value)
-    await transact(dut, old_address, expected_state=RSP_MISS)
+    assert await tb.read_word(old_base + 2 * DATA_BYTES) == old_backing[2]
+    await tb.write_word(old_base + 2 * DATA_BYTES, old_value)
+    await tb.write_word(new_base + 4 * DATA_BYTES, new_value)
+
+    expected_old = old_backing.copy()
+    expected_old[2] = old_value
+    assert unpack_line(tb.ram.read(old_base, LINE_BYTES)) == expected_old
+    assert unpack_line(tb.ram.read(new_base, LINE_BYTES)) == new_backing
+    assert await tb.read_word(new_base + 4 * DATA_BYTES) == new_value
+
+    # Reading the old tag evicts the new dirty line, then reloads the old line.
+    assert await tb.read_word(old_base + 2 * DATA_BYTES) == old_value
+    expected_new = [0] * DATA_PER_LINE
+    expected_new[4] = new_value
+    assert unpack_line(tb.ram.read(new_base, LINE_BYTES)) == expected_new
 
 
-@cocotb.test()
-async def randomized_back_to_back_stress(dut):
-    """Compare 100 mixed requests against a direct-mapped software model."""
-    await start_and_reset(dut)
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def randomized_write_back_model(dut):
+    """Compare mixed traffic against a direct-mapped write-back software model."""
+    tb = CacheTB(dut)
+    await tb.reset()
     rng = random.Random(0x1CA5E)
-    model = {}
+    backing = {}
+    model_cache = {}
     requests = []
-    expected_responses = []
+
+    for tag in range(8):
+        for index in range(32):
+            words = [rng.getrandbits(DATA_WIDTH) for _ in range(DATA_PER_LINE)]
+            backing[(tag, index)] = words
+            tb.ram.write(
+                line_address(cache_address(tag, index)),
+                pack_line(words),
+            )
 
     for _ in range(100):
-        tag = rng.randrange(8)
-        index = rng.randrange(32)
-        word = rng.randrange(DATA_PER_LINE)
+        requests.append(
+            (
+                rng.randrange(8),
+                rng.randrange(32),
+                rng.randrange(DATA_PER_LINE),
+                rng.random() < 0.55,
+                rng.getrandbits(DATA_WIDTH),
+            )
+        )
+
+    for tag, index, word, is_write, value in requests:
         address = cache_address(tag, index, word)
-        is_write = rng.random() < 0.55
+        resident = model_cache.get(index)
+        hit = resident is not None and resident[0] == tag
+
+        if not hit and resident is not None and resident[2]:
+            backing[(resident[0], index)] = resident[1].copy()
 
         if is_write:
-            value = rng.getrandbits(DATA_WIDTH)
-            resident = model.get(index)
-            if resident is None or resident[0] != tag:
-                line_data = [0] * DATA_PER_LINE
-            else:
-                line_data = resident[1].copy()
-            line_data[word] = value
-            model[index] = (tag, line_data)
-            requests.append((address, True, value))
-            expected_responses.append((RSP_OK, 0))
+            line = resident[1].copy() if hit else [0] * DATA_PER_LINE
+            line[word] = value
+            model_cache[index] = (tag, line, True)
+            await tb.write_word(address, value)
         else:
-            resident = model.get(index)
-            if resident is not None and resident[0] == tag:
-                expected_state = RSP_OK
-                expected_data = resident[1][word]
+            if hit:
+                line = resident[1]
             else:
-                expected_state = RSP_MISS
-                expected_data = 0
-            requests.append((address, False, 0))
-            expected_responses.append((expected_state, expected_data))
+                line = backing[(tag, index)].copy()
+                model_cache[index] = (tag, line, False)
+            assert await tb.read_word(address) == line[word]
 
-    driver = cocotb.start_soon(drive_request_stream(dut, requests))
-    await check_response_stream(dut, expected_responses)
-    await driver
+    for (tag, index), expected in backing.items():
+        actual = unpack_line(
+            tb.ram.read(
+                line_address(cache_address(tag, index)),
+                LINE_BYTES,
+            )
+        )
+        assert actual == expected
 
 
-@cocotb.test()
-async def response_backpressure_blocks_new_requests(dut):
-    """A pending response remains stable and prevents request acceptance."""
-    await start_and_reset(dut)
-    resident_address = cache_address(tag=3, index=23, word=1)
-    blocked_address = cache_address(tag=6, index=24, word=4)
-    resident_value = 0x5A5AA5A55A5AA5A5
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def independent_channels_and_backpressure(dut):
+    """Exercise split AW/W acceptance and stalled B/R responses on both buses."""
+    tb = CacheTB(dut)
+    await tb.reset()
+    old_base = line_address(cache_address(tag=3, index=23))
+    new_base = line_address(cache_address(tag=6, index=23))
+    old_line = [0x3000 + index for index in range(DATA_PER_LINE)]
+    new_line = [0x6000 + index for index in range(DATA_PER_LINE)]
+    tb.ram.write(old_base, pack_line(old_line))
+    tb.ram.write(new_base, pack_line(new_line))
 
-    await transact(
-        dut,
-        resident_address,
-        write=True,
-        data=resident_value,
+    tb.master.write_if.aw_channel.set_pause_generator(
+        cycle_pause((1, 0, 0, 1, 0))
     )
-    await issue_request(dut, resident_address)
-
-    assert int(dut.rsp_val_o.value) == 1
-    assert int(dut.rsp_state_o.value) == RSP_OK
-    assert int(dut.rsp_data_o.value) == resident_value
-
-    dut.req_val_i.value = 1
-    dut.req_rw_flag_i.value = 1
-    dut.req_addr_i.value = blocked_address
-    dut.req_data_i.value = 0xBAD0BAD0BAD0BAD0
-
-    for _ in range(6):
-        await RisingEdge(dut.clk_i)
-        await FallingEdge(dut.clk_i)
-        await settle()
-        assert int(dut.req_rdy_o.value) == 0
-        assert int(dut.rsp_val_o.value) == 1
-        assert int(dut.rsp_state_o.value) == RSP_OK
-        assert int(dut.rsp_data_o.value) == resident_value
-
-    dut.req_val_i.value = 0
-    await receive_response(
-        dut,
-        expected_state=RSP_OK,
-        expected_data=resident_value,
+    tb.master.write_if.w_channel.set_pause_generator(
+        cycle_pause((0, 1, 0, 0, 1))
     )
+    tb.master.write_if.b_channel.set_pause_generator(cycle_pause())
+    tb.master.read_if.r_channel.set_pause_generator(cycle_pause((1, 1, 0)))
 
-    # The blocked write must not have modified the cache.
-    await transact(dut, blocked_address, expected_state=RSP_MISS)
-    await transact(dut, resident_address, expected_data=resident_value)
+    tb.ram.write_if.aw_channel.set_pause_generator(cycle_pause((1, 0, 0)))
+    tb.ram.write_if.w_channel.set_pause_generator(cycle_pause((0, 1, 0)))
+    tb.ram.write_if.b_channel.set_pause_generator(cycle_pause((1, 0)))
+    tb.ram.read_if.ar_channel.set_pause_generator(cycle_pause((1, 1, 0)))
+    tb.ram.read_if.r_channel.set_pause_generator(cycle_pause((1, 0, 0)))
+
+    assert await tb.read_word(old_base) == old_line[0]
+    updated = 0xDEADBEEF01234567
+    await tb.write_word(old_base + DATA_BYTES, updated)
+
+    # This conflicting read forces an independently handshaken dirty eviction.
+    assert await tb.read_word(new_base + 2 * DATA_BYTES) == new_line[2]
+    expected_old = old_line.copy()
+    expected_old[1] = updated
+    assert unpack_line(tb.ram.read(old_base, LINE_BYTES)) == expected_old

@@ -81,20 +81,24 @@ An RTL template can register a module-level test with Jinja's `do` extension:
 {% do unit_test(
     module_name = "simple_cache_1rw",
     test_framework = "cocotb",
+    use_wrapper = true,
     test_path = "dv/cocotb_benches/1rw_simple_cache_tb.py") %}
 ```
 
 `module_name` is the rendered SystemVerilog module to use as the DUT,
 `test_framework` selects the runner (currently only `cocotb` is supported), and
-`test_path` locates the Python test module. During `make prepare`, the renderer
-collects these declarations and writes `build/.unit-test.json`:
+`test_path` locates the Python test module. `use_wrapper` defaults to `false`.
+When enabled, the runner compiles all RTL files under `dv/cocotb_wrappers/` and
+uses `<module_name>_unit_test` as the cocotb top-level. During `make prepare`,
+the renderer collects these declarations and writes `build/.unit-test.json`:
 
 ```json
 [
   {
     "module_name": "simple_cache_1rw",
     "test_framework": "cocotb",
-    "test_path": "dv/cocotb_benches/1rw_simple_cache_tb.py"
+    "test_path": "dv/cocotb_benches/1rw_simple_cache_tb.py",
+    "use_wrapper": true
   }
 ]
 ```

@@ -4,6 +4,7 @@ SHELL := /bin/bash
 PROJECT_ROOT := $(abspath .)
 OSS_CAD_SUITE ?= /opt/oss-cad-suite
 VENV ?= $(PROJECT_ROOT)/venv
+VENV_PYTHON ?= $(shell pyenv which python3 2>/dev/null || command -v python3)
 
 ifneq ($(wildcard $(OSS_CAD_SUITE)/bin),)
 export PATH := $(OSS_CAD_SUITE)/bin:$(OSS_CAD_SUITE)/py3bin:$(PATH)
@@ -12,6 +13,7 @@ export GHDL_PREFIX := $(OSS_CAD_SUITE)/lib/ghdl
 endif
 
 ifneq ($(wildcard $(VENV)/bin/python3),)
+export PATH := $(VENV)/bin:$(PATH)
 PYTHON ?= $(VENV)/bin/python3
 else
 PYTHON ?= python3
@@ -73,7 +75,7 @@ help:
 	@echo "  make clean                 Remove generated files"
 
 setup:
-	python3 -m venv $(VENV)
+	$(VENV_PYTHON) -m venv $(VENV)
 	$(VENV)/bin/python3 -m pip install -r requirements.txt
 
 doctor:

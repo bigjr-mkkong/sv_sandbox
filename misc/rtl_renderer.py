@@ -35,8 +35,12 @@ def validate_config(config: object) -> dict:
 
 
 def unit_test(
-    *, module_name: str, test_framework: str, test_path: str
-) -> dict[str, str]:
+    *,
+    module_name: str,
+    test_framework: str,
+    test_path: str,
+    use_wrapper: bool = False,
+) -> dict[str, object]:
     """Validate and create one unit-test manifest entry."""
     if not isinstance(module_name, str) or not SV_IDENTIFIER.fullmatch(module_name):
         raise ValueError("unit_test.module_name must be a SystemVerilog identifier")
@@ -50,11 +54,14 @@ def unit_test(
         )
     if not isinstance(test_path, str) or not test_path.strip():
         raise ValueError("unit_test.test_path must be a non-empty string")
+    if not isinstance(use_wrapper, bool):
+        raise ValueError("unit_test.use_wrapper must be true or false")
 
     return {
         "module_name": module_name,
         "test_framework": test_framework,
         "test_path": test_path,
+        "use_wrapper": use_wrapper,
     }
 
 
@@ -65,12 +72,12 @@ def render_tree(
     unit_test_manifest: Path | None = None,
 ) -> None:
     config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
-    registered_unit_tests: list[dict[str, str]] = []
+    registered_unit_tests: list[dict[str, object]] = []
     registered_modules: set[str] = set()
 
     def register_unit_test(**kwargs: object) -> None:
         entry = unit_test(**kwargs)
-        module_name = entry["module_name"]
+        module_name = str(entry["module_name"])
         if module_name in registered_modules:
             raise ValueError(
                 f"unit test for module {module_name} is registered more than once"
