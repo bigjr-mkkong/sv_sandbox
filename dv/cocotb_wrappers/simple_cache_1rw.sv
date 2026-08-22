@@ -10,10 +10,10 @@ module simple_cache_1rw_unit_test;
     logic clk_i;
     logic rst_ni;
 
-    taxi_axil_if #(
-        .DATA_W(DATA_WIDTH),
-        .ADDR_W(ADDR_WIDTH)
-    ) s_axil();
+    upstream_if #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH)
+    ) upstream();
 
     taxi_axil_if #(
         .DATA_W(DATA_WIDTH * DATA_PER_LINE),
@@ -27,8 +27,7 @@ module simple_cache_1rw_unit_test;
     ) dut (
         .clk_i(clk_i),
         .rst_ni(rst_ni),
-        .s_axil_wr(s_axil),
-        .s_axil_rd(s_axil),
+        .upstream(upstream),
         .m_axil_wr(m_axil),
         .m_axil_rd(m_axil)
     );

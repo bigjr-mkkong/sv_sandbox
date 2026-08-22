@@ -4,7 +4,9 @@ import random
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
-from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiLiteRam, AxiResp
+from cocotbext.axi import AxiLiteBus, AxiLiteRam
+
+from dv.cocotb_benches.upstream_if import UpstreamMaster
 
 
 CLOCK_PERIOD_NS = 10
@@ -58,12 +60,7 @@ class CacheTB:
         self.dut = dut
         cocotb.start_soon(Clock(dut.clk_i, CLOCK_PERIOD_NS, unit="ns").start())
 
-        self.master = AxiLiteMaster(
-            AxiLiteBus.from_entity(dut.s_axil),
-            dut.clk_i,
-            dut.rst_ni,
-            reset_active_level=False,
-        )
+        self.master = UpstreamMaster(dut.upstream, dut.clk_i)
         self.ram = AxiLiteRam(
             AxiLiteBus.from_entity(dut.m_axil),
             dut.clk_i,
@@ -80,18 +77,18 @@ class CacheTB:
         for _ in range(2):
             await RisingEdge(self.dut.clk_i)
 
-    async def read_word(self, address):
-        response = await self.master.read(address, DATA_BYTES)
-        assert response.resp == AxiResp.OKAY
-        assert len(response.data) == DATA_BYTES
-        return int.from_bytes(response.data, "little")
+    async def read_word(self, address, *, response_delay_cycles=0):
+        return await self.master.read(
+            address, response_delay_cycles=response_delay_cycles
+        )
 
-    async def write_word(self, address, value):
+    async def write_word(self, address, value, *, response_delay_cycles=0):
         response = await self.master.write(
             address,
-            value.to_bytes(DATA_BYTES, "little"),
+            value,
+            response_delay_cycles=response_delay_cycles,
         )
-        assert response.resp == AxiResp.OKAY
+        assert response == 0
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
@@ -232,8 +229,8 @@ async def randomized_write_back_model(dut):
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
-async def independent_channels_and_backpressure(dut):
-    """Exercise split AW/W acceptance and stalled B/R responses on both buses."""
+async def upstream_response_and_downstream_axil_backpressure(dut):
+    """Hold the synchronized response and stall downstream AXI-Lite channels."""
     tb = CacheTB(dut)
     await tb.reset()
     old_base = line_address(cache_address(tag=3, index=23))
@@ -243,24 +240,17 @@ async def independent_channels_and_backpressure(dut):
     tb.ram.write(old_base, pack_line(old_line))
     tb.ram.write(new_base, pack_line(new_line))
 
-    tb.master.write_if.aw_channel.set_pause_generator(
-        cycle_pause((1, 0, 0, 1, 0))
-    )
-    tb.master.write_if.w_channel.set_pause_generator(
-        cycle_pause((0, 1, 0, 0, 1))
-    )
-    tb.master.write_if.b_channel.set_pause_generator(cycle_pause())
-    tb.master.read_if.r_channel.set_pause_generator(cycle_pause((1, 1, 0)))
-
     tb.ram.write_if.aw_channel.set_pause_generator(cycle_pause((1, 0, 0)))
     tb.ram.write_if.w_channel.set_pause_generator(cycle_pause((0, 1, 0)))
     tb.ram.write_if.b_channel.set_pause_generator(cycle_pause((1, 0)))
     tb.ram.read_if.ar_channel.set_pause_generator(cycle_pause((1, 1, 0)))
     tb.ram.read_if.r_channel.set_pause_generator(cycle_pause((1, 0, 0)))
 
-    assert await tb.read_word(old_base) == old_line[0]
+    assert await tb.read_word(old_base, response_delay_cycles=4) == old_line[0]
     updated = 0xDEADBEEF01234567
-    await tb.write_word(old_base + DATA_BYTES, updated)
+    await tb.write_word(
+        old_base + DATA_BYTES, updated, response_delay_cycles=3
+    )
 
     # This conflicting read forces an independently handshaken dirty eviction.
     assert await tb.read_word(new_base + 2 * DATA_BYTES) == new_line[2]

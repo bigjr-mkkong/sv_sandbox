@@ -1,11 +1,12 @@
 `timescale 1ns / 1ps
 
 /*
- * Blocking, direct-mapped, write-back cache with AXI-Lite interfaces.
+ * Blocking, direct-mapped, write-back cache.
  *
- * The upstream bus transfers one DATA_WIDTH word. The downstream bus transfers
- * one complete cache line per request. Writes update the cache and mark the line
- * dirty; a dirty victim is written downstream before it is replaced.
+ * The synchronized upstream request interface transfers one DATA_WIDTH word.
+ * The downstream AXI-Lite bus transfers one complete cache line per request.
+ * Writes update the cache and mark the line dirty; a dirty victim is written
+ * downstream before it is replaced.
  */
 
 /* verilator lint_off DECLFILENAME */
@@ -23,9 +24,8 @@ module simple_cache_1rw #(
     input logic clk_i,
     input logic rst_ni,
 
-    // Upstream CPU AXI-Lite slave interface.
-    taxi_axil_if.wr_slv s_axil_wr,
-    taxi_axil_if.rd_slv s_axil_rd,
+    // Upstream CPU request/response interface. req_rw_flag is 1 for writes.
+    upstream_if.if_slv upstream,
 
     // Downstream memory AXI-Lite master interface.
     taxi_axil_if.wr_mst m_axil_wr,
@@ -42,8 +42,6 @@ module simple_cache_1rw #(
     localparam int unsigned OFFSET_WIDTH = $clog2(LINE_BYTES);
     localparam int unsigned INDEX_BITS = $clog2(ROW_CNT);
     localparam int unsigned TAG_WIDTH = ADDR_WIDTH - OFFSET_WIDTH - INDEX_BITS;
-
-    localparam logic [1:0] AXIL_RESP_OKAY = 2'b00;
 
     typedef struct packed {
         logic                                      line_valid;
@@ -72,7 +70,6 @@ module simple_cache_1rw #(
     logic                  evict_aw_done_d, evict_aw_done_q;
     logic                  evict_w_done_d, evict_w_done_q;
 
-    logic [ADDR_WIDTH-1:0]       active_req_addr;
     logic [TAG_WIDTH-1:0]        req_addr_tag;
     logic [INDEX_BITS-1:0]      req_addr_idx;
     logic [WORD_INDEX_WIDTH-1:0] req_word_idx;
@@ -82,8 +79,6 @@ module simple_cache_1rw #(
     logic [ADDR_WIDTH-1:0]       pending_line_addr;
     logic [ADDR_WIDTH-1:0]       victim_line_addr;
 
-    logic                                      write_pair_valid;
-    logic                                      write_channel_pending;
     logic                                      is_hit;
     logic                                      victim_is_dirty;
     logic                                      write_cache_flag;
@@ -101,16 +96,10 @@ module simple_cache_1rw #(
         evict_aw_done_d = evict_aw_done_q;
         evict_w_done_d = evict_w_done_q;
 
-        write_pair_valid = s_axil_wr.awvalid && s_axil_wr.wvalid;
-        write_channel_pending = s_axil_wr.awvalid || s_axil_wr.wvalid;
-        active_req_addr = write_pair_valid
-            ? ADDR_WIDTH'(s_axil_wr.awaddr)
-            : ADDR_WIDTH'(s_axil_rd.araddr);
-
         {req_addr_tag, req_addr_idx, req_word_idx} = {
-            TAG_WIDTH'(active_req_addr >> (OFFSET_WIDTH + INDEX_BITS)),
-            INDEX_BITS'(active_req_addr >> OFFSET_WIDTH),
-            WORD_INDEX_WIDTH'(active_req_addr >> BYTE_OFFSET_WIDTH)
+            TAG_WIDTH'(upstream.req_addr >> (OFFSET_WIDTH + INDEX_BITS)),
+            INDEX_BITS'(upstream.req_addr >> OFFSET_WIDTH),
+            WORD_INDEX_WIDTH'(upstream.req_addr >> BYTE_OFFSET_WIDTH)
         };
 
         {pending_addr_tag, pending_addr_idx, pending_word_idx} = {
@@ -142,17 +131,9 @@ module simple_cache_1rw #(
         write_cache_tag = req_addr_tag;
         write_cache_dirty = cache[req_addr_idx].line_dirty;
 
-        s_axil_wr.awready = 1'b0;
-        s_axil_wr.wready = 1'b0;
-        s_axil_wr.bresp = AXIL_RESP_OKAY;
-        s_axil_wr.buser = '0;
-        s_axil_wr.bvalid = 1'b0;
-
-        s_axil_rd.arready = 1'b0;
-        s_axil_rd.rdata = rsp_data_q;
-        s_axil_rd.rresp = AXIL_RESP_OKAY;
-        s_axil_rd.ruser = '0;
-        s_axil_rd.rvalid = 1'b0;
+        upstream.req_rdy = 1'b0;
+        upstream.rsp_val = 1'b0;
+        upstream.rsp_data = rsp_data_q;
 
         m_axil_wr.awaddr = victim_line_addr;
         m_axil_wr.awprot = '0;
@@ -172,14 +153,14 @@ module simple_cache_1rw #(
 
         case (state_q)
             IDLE: begin
-                if (write_channel_pending) begin
-                    if (write_pair_valid) begin
-                        s_axil_wr.awready = 1'b1;
-                        s_axil_wr.wready = 1'b1;
+                upstream.req_rdy = 1'b1;
 
-                        req_addr_d = active_req_addr;
-                        req_data_d = DATA_WIDTH'(s_axil_wr.wdata);
-                        req_is_write_d = 1'b1;
+                if (upstream.req_val) begin
+                    req_addr_d = ADDR_WIDTH'(upstream.req_addr);
+                    req_data_d = DATA_WIDTH'(upstream.req_data);
+                    req_is_write_d = upstream.req_rw_flag;
+
+                    if (upstream.req_rw_flag) begin
                         rsp_data_d = '0;
 
                         if (victim_is_dirty) begin
@@ -191,43 +172,31 @@ module simple_cache_1rw #(
                                 write_cache_line = '0;
                             end
                             write_cache_line[req_word_idx] =
-                                DATA_WIDTH'(s_axil_wr.wdata);
+                                DATA_WIDTH'(upstream.req_data);
                             write_cache_dirty = 1'b1;
                             write_cache_flag = 1'b1;
                             state_d = RESP;
                         end
-                    end
-                end else if (s_axil_rd.arvalid) begin
-                    s_axil_rd.arready = 1'b1;
-
-                    req_addr_d = active_req_addr;
-                    req_data_d = '0;
-                    req_is_write_d = 1'b0;
-
-                    if (is_hit) begin
-                        rsp_data_d = cache[req_addr_idx].line_data[req_word_idx];
-                        state_d = RESP;
-                    end else if (victim_is_dirty) begin
-                        evict_aw_done_d = 1'b0;
-                        evict_w_done_d = 1'b0;
-                        state_d = EVICT_SUBMIT;
                     end else begin
-                        state_d = MISS_SUBMIT;
+                        if (is_hit) begin
+                            rsp_data_d =
+                                cache[req_addr_idx].line_data[req_word_idx];
+                            state_d = RESP;
+                        end else if (victim_is_dirty) begin
+                            evict_aw_done_d = 1'b0;
+                            evict_w_done_d = 1'b0;
+                            state_d = EVICT_SUBMIT;
+                        end else begin
+                            state_d = MISS_SUBMIT;
+                        end
                     end
                 end
             end
 
             RESP: begin
-                if (req_is_write_q) begin
-                    s_axil_wr.bvalid = 1'b1;
-                    if (s_axil_wr.bready) begin
-                        state_d = IDLE;
-                    end
-                end else begin
-                    s_axil_rd.rvalid = 1'b1;
-                    if (s_axil_rd.rready) begin
-                        state_d = IDLE;
-                    end
+                upstream.rsp_val = 1'b1;
+                if (upstream.rsp_rdy) begin
+                    state_d = IDLE;
                 end
             end
 

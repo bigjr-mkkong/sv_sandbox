@@ -6,6 +6,11 @@
 // third_party/taxi/src/lss/rtl/taxi_uart.sv
 
 third_party/taxi/src/axi/rtl/taxi_axil_if.sv
+third_party/taxi/src/prim/rtl/taxi_penc.sv
+third_party/taxi/src/prim/rtl/taxi_arbiter.sv
+third_party/taxi/src/axi/rtl/taxi_axil_interconnect_rd.sv
+third_party/taxi/src/axi/rtl/taxi_axil_interconnect_wr.sv
+third_party/taxi/src/axi/rtl/taxi_axil_interconnect.sv
 
 // Project RTL. Files below rtl/ are rendered into build/rtl/.
 rtl/config_pkg.sv
