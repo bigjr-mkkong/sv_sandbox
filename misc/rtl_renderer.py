@@ -40,6 +40,7 @@ def unit_test(
     test_framework: str,
     test_path: str,
     use_wrapper: bool = False,
+    rtl_dependencies: list[str] | None = None,
 ) -> dict[str, object]:
     """Validate and create one unit-test manifest entry."""
     if not isinstance(module_name, str) or not SV_IDENTIFIER.fullmatch(module_name):
@@ -56,12 +57,21 @@ def unit_test(
         raise ValueError("unit_test.test_path must be a non-empty string")
     if not isinstance(use_wrapper, bool):
         raise ValueError("unit_test.use_wrapper must be true or false")
+    if rtl_dependencies is None:
+        rtl_dependencies = []
+    if not isinstance(rtl_dependencies, list) or not all(
+        isinstance(path, str) and path.strip() for path in rtl_dependencies
+    ):
+        raise ValueError(
+            "unit_test.rtl_dependencies must be a list of non-empty paths"
+        )
 
     return {
         "module_name": module_name,
         "test_framework": test_framework,
         "test_path": test_path,
         "use_wrapper": use_wrapper,
+        "rtl_dependencies": rtl_dependencies,
     }
 
 

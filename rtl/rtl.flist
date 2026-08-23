@@ -18,3 +18,5 @@ rtl/1rw_dumb_dram.sv
 rtl/1rw_simple_cache.sv
 rtl/main_module.sv
 rtl/top_module.sv
+rtl/MESI_protocol.sv
+rtl/cache_coherency.sv

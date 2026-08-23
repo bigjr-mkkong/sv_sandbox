@@ -7,6 +7,20 @@ package config_pkg;
     parameter int unsigned ADDR_WIDTH     = 64;
     parameter int unsigned DATA_WIDTH     = 64;
 
+    typedef enum logic [1:0] {
+        COH_Modified,
+        COH_Exclusive,
+        COH_Shared,
+        COH_Invalid
+    } coh_state;
+
+    typedef enum logic [1:0] {
+        BusNOP,
+        BusRd,   // Dirty snoopers must supply or write back their data.
+        BusRd_Ex, // MESI BusRdX: fetch and invalidate other cached copies.
+        BusSync   // MESI BusUpgr: invalidate shared copies without a fetch.
+    } coh_bus_op;
+
 endpackage
 
 interface upstream_if #(
@@ -46,4 +60,18 @@ interface upstream_if #(
         output rsp_data,
         input  rsp_rdy
     );
+endinterface
+
+interface coh_bus_if #(
+    parameter int unsigned ADDR_WIDTH = config_pkg::ADDR_WIDTH,
+    parameter int unsigned DATA_WIDTH = config_pkg::DATA_WIDTH
+) ();
+    logic                  req_val;
+    config_pkg::coh_bus_op bus_op;
+    logic [ADDR_WIDTH-1:0] req_addr;
+    logic                  req_rdy;
+
+    logic rsp_val;
+    logic rsp_rdy;
+
 endinterface

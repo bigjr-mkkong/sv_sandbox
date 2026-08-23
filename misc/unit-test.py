@@ -58,6 +58,7 @@ def load_manifest(manifest_path: Path) -> list[dict[str, object]]:
             raise UnitTestError(f"unit-test entry {index} is missing: {missing}")
 
         entry = {field: raw_entry[field] for field in required_fields}
+        rtl_dependencies = raw_entry.get("rtl_dependencies", [])
         string_fields = ("module_name", "test_framework", "test_path")
         if not all(isinstance(entry[field], str) for field in string_fields):
             raise UnitTestError(
@@ -68,6 +69,14 @@ def load_manifest(manifest_path: Path) -> list[dict[str, object]]:
             raise UnitTestError(
                 f"use_wrapper in unit-test entry {index} must be true or false"
             )
+        if not isinstance(rtl_dependencies, list) or not all(
+            isinstance(path, str) and path.strip() for path in rtl_dependencies
+        ):
+            raise UnitTestError(
+                f"rtl_dependencies in unit-test entry {index} must be a list "
+                "of non-empty paths"
+            )
+        entry["rtl_dependencies"] = rtl_dependencies
         module_name = str(entry["module_name"])
         if not SV_IDENTIFIER.fullmatch(module_name):
             raise UnitTestError(
@@ -143,6 +152,7 @@ def run_cocotb_test(
     makefile: Path,
     manifest_path: Path,
     source_path: Path,
+    dependency_paths: list[Path],
     common_sources: list[Path],
     module_name: str,
     test_path: str,
@@ -153,8 +163,10 @@ def run_cocotb_test(
     """Invoke the existing cocotb make flow for one registered module."""
     test_module, test_file = cocotb_test_module(project_root, test_path)
     top_module = module_name
-    source_paths = [*common_sources, source_path]
-    compile_dependencies = [test_file, manifest_path]
+    source_paths = list(
+        dict.fromkeys([*common_sources, *dependency_paths, source_path])
+    )
+    compile_dependencies = [test_file, manifest_path, *dependency_paths]
     if use_wrapper:
         wrapper_dir = project_root / "dv" / "cocotb_wrappers"
         if not wrapper_dir.is_dir():
@@ -243,6 +255,24 @@ def main() -> int:
         framework = str(entry["test_framework"])
         try:
             source_path = find_module_source(module_sources, module_name)
+            dependency_paths = []
+            for dependency in entry["rtl_dependencies"]:
+                relative_dependency = Path(str(dependency))
+                if relative_dependency.parts[:1] == ("rtl",):
+                    relative_dependency = Path(*relative_dependency.parts[1:])
+                dependency_path = (rtl_dir / relative_dependency).resolve()
+                try:
+                    dependency_path.relative_to(rtl_dir)
+                except ValueError as error:
+                    raise UnitTestError(
+                        f"RTL dependency escapes rendered tree: {dependency}"
+                    ) from error
+                if not dependency_path.is_file():
+                    raise UnitTestError(
+                        f"RTL dependency not found for {module_name}: "
+                        f"{dependency_path}"
+                    )
+                dependency_paths.append(dependency_path)
             if framework != "cocotb":
                 raise UnitTestError(
                     f"unsupported test framework for {module_name}: {framework}"
@@ -252,6 +282,7 @@ def main() -> int:
                 makefile=makefile,
                 manifest_path=manifest_path,
                 source_path=source_path,
+                dependency_paths=dependency_paths,
                 common_sources=[
                     path for path in common_sources if path != source_path
                 ],

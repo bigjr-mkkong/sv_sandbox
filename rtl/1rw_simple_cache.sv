@@ -10,6 +10,8 @@
  */
 
 /* verilator lint_off DECLFILENAME */
+import config_pkg::*;
+
 {% do unit_test(
     module_name = "simple_cache_1rw",
     test_framework = "cocotb",
@@ -46,6 +48,7 @@ module simple_cache_1rw #(
     typedef struct packed {
         logic                                      line_valid;
         logic                                      line_dirty;
+        coh_state                                   coh;
         logic [TAG_WIDTH-1:0]                      line_tag;
         logic [DATA_PER_LINE-1:0][DATA_WIDTH-1:0] line_data;
     } cache_line_t;
@@ -282,6 +285,7 @@ module simple_cache_1rw #(
             for (int unsigned i = 0; i < ROW_CNT; i++) begin
                 cache[i].line_valid <= 1'b0;
                 cache[i].line_dirty <= 1'b0;
+                cache[i].coh <= COH_Invalid;
             end
         end else begin
             state_q <= state_d;
