@@ -6,6 +6,7 @@ from cocotb.clock import Clock
 from cocotb.triggers import RisingEdge
 from cocotbext.axi import AxiLiteBus, AxiLiteRam
 
+from dv.cocotb_benches.MESI_protocol_tb import BUS_RD, BUS_RDX, BUS_UPGR
 from dv.cocotb_benches.upstream_if import UpstreamMaster
 
 
@@ -55,12 +56,60 @@ def unpack_line(data):
     ]
 
 
+class CoherenceBusResponder:
+    """Single-outstanding responder for the cache-local coherence interface."""
+
+    def __init__(self, dut):
+        self.dut = dut
+        self.shared = False
+        self.requests = []
+        dut.coh_bus_req_rdy_i.value = 1
+        dut.coh_bus_rsp_val_i.value = 0
+        dut.coh_bus_shared_i.value = 0
+        cocotb.start_soon(self._run())
+
+    async def _run(self):
+        while True:
+            await RisingEdge(self.dut.clk_i)
+
+            if not self.dut.rst_ni.value:
+                self.dut.coh_bus_req_rdy_i.value = 1
+                self.dut.coh_bus_rsp_val_i.value = 0
+                self.dut.coh_bus_shared_i.value = 0
+                continue
+
+            response_accepted = (
+                self.dut.coh_bus_rsp_val_i.value
+                and self.dut.coh_bus_rsp_rdy_o.value
+            )
+            request_accepted = (
+                self.dut.coh_bus_req_val_o.value
+                and self.dut.coh_bus_req_rdy_i.value
+            )
+
+            if response_accepted:
+                self.dut.coh_bus_rsp_val_i.value = 0
+                self.dut.coh_bus_req_rdy_i.value = 1
+
+            if request_accepted:
+                self.requests.append(
+                    (
+                        int(self.dut.coh_bus_req_op_o.value),
+                        int(self.dut.coh_bus_req_addr_o.value),
+                    )
+                )
+                self.dut.coh_bus_req_rdy_i.value = 0
+                self.dut.coh_bus_shared_i.value = int(self.shared)
+                self.dut.coh_bus_rsp_val_i.value = 1
+
+
 class CacheTB:
     def __init__(self, dut):
         self.dut = dut
         cocotb.start_soon(Clock(dut.clk_i, CLOCK_PERIOD_NS, unit="ns").start())
 
         self.master = UpstreamMaster(dut.upstream, dut.clk_i)
+        self.coherence = CoherenceBusResponder(dut)
         self.ram = AxiLiteRam(
             AxiLiteBus.from_entity(dut.m_axil),
             dut.clk_i,
@@ -112,16 +161,18 @@ async def read_miss_fills_the_complete_line(dut):
     tb.ram.write(base, pack_line(original))
 
     assert await tb.read_word(base + 3 * DATA_BYTES) == original[3]
+    assert tb.coherence.requests == [(BUS_RD, base)]
 
     # Alter backing memory after the fill; every subsequent word must still hit.
     tb.ram.write(base, pack_line(replacement))
     for word, expected in enumerate(original):
         assert await tb.read_word(base + word * DATA_BYTES) == expected
+    assert tb.coherence.requests == [(BUS_RD, base)]
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def write_miss_allocates_without_downstream_access(dut):
-    """A write miss creates a dirty cache line but leaves memory untouched."""
+    """A write miss obtains ownership without reading or updating memory."""
     tb = CacheTB(dut)
     await tb.reset()
     base = line_address(cache_address(tag=1, index=7))
@@ -131,9 +182,29 @@ async def write_miss_allocates_without_downstream_access(dut):
 
     await tb.write_word(base + 5 * DATA_BYTES, value)
 
+    assert tb.coherence.requests == [(BUS_RDX, base)]
     assert unpack_line(tb.ram.read(base, LINE_BYTES)) == backing
     assert await tb.read_word(base + 5 * DATA_BYTES) == value
     assert await tb.read_word(base + 2 * DATA_BYTES) == 0
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def shared_read_hit_upgrades_before_write(dut):
+    """A write to a Shared line issues BusUpgr before modifying local data."""
+    tb = CacheTB(dut)
+    await tb.reset()
+    base = line_address(cache_address(tag=3, index=13))
+    backing = [0x3300 + index for index in range(DATA_PER_LINE)]
+    updated = 0xCAFECAFE12345678
+    tb.ram.write(base, pack_line(backing))
+
+    tb.coherence.shared = True
+    assert await tb.read_word(base + DATA_BYTES) == backing[1]
+    await tb.write_word(base + DATA_BYTES, updated)
+
+    assert tb.coherence.requests == [(BUS_RD, base), (BUS_UPGR, base)]
+    assert await tb.read_word(base + DATA_BYTES) == updated
+    assert unpack_line(tb.ram.read(base, LINE_BYTES)) == backing
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")

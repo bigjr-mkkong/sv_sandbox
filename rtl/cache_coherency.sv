@@ -158,7 +158,7 @@ endmodule
 
 module cache_coherency_bus (
     input logic clk_i,
-    input logic rst_ni,
+    input logic rst_ni
 
 );
 
