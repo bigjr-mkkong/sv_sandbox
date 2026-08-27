@@ -105,6 +105,58 @@ def index_rendered_modules(rtl_dir: Path) -> dict[str, list[Path]]:
     return module_sources
 
 
+def load_rtl_filelist(
+    project_root: Path, rtl_dir: Path, filelist_path: Path
+) -> list[Path]:
+    """Load the canonical RTL sources, mapping templates to rendered files."""
+    if not filelist_path.is_file():
+        raise UnitTestError(f"RTL file list not found: {filelist_path}")
+
+    source_paths: list[Path] = []
+    for line_number, raw_line in enumerate(
+        filelist_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.split("//", maxsplit=1)[0].strip()
+        if not line:
+            continue
+
+        try:
+            fields = shlex.split(line)
+        except ValueError as error:
+            raise UnitTestError(
+                f"invalid entry in {filelist_path}:{line_number}: {error}"
+            ) from error
+        if len(fields) != 1:
+            raise UnitTestError(
+                f"expected one RTL path in {filelist_path}:{line_number}"
+            )
+
+        listed_path = Path(fields[0])
+        if listed_path.is_absolute():
+            source_path = listed_path.resolve()
+        elif listed_path.parts[:1] == ("rtl",):
+            source_path = (rtl_dir / Path(*listed_path.parts[1:])).resolve()
+        else:
+            source_path = (project_root / listed_path).resolve()
+
+        if source_path.suffix not in RTL_SUFFIXES:
+            raise UnitTestError(
+                f"unsupported RTL source in {filelist_path}:{line_number}: "
+                f"{listed_path}"
+            )
+        if not source_path.is_file():
+            raise UnitTestError(
+                f"RTL source in {filelist_path}:{line_number} was not found: "
+                f"{source_path}"
+            )
+        if source_path not in source_paths:
+            source_paths.append(source_path)
+
+    if not source_paths:
+        raise UnitTestError(f"RTL file list contains no sources: {filelist_path}")
+    return source_paths
+
+
 def find_module_source(
     module_sources: dict[str, list[Path]], module_name: str
 ) -> Path:
@@ -215,6 +267,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path("build/.unit-test.json"))
     parser.add_argument("--rtl-dir", type=Path, default=Path("build/rtl"))
+    parser.add_argument("--rtl-flist", type=Path, default=Path("rtl/rtl.flist"))
     parser.add_argument("--build-dir", type=Path, default=Path("build/unit-test"))
     parser.add_argument("--cocotb-makefile", type=Path, default=Path("Makefile.cocotb"))
     parser.add_argument("--sim", default="verilator")
@@ -222,6 +275,7 @@ def main() -> int:
 
     manifest_path = project_path(project_root, args.manifest)
     rtl_dir = project_path(project_root, args.rtl_dir)
+    rtl_flist = project_path(project_root, args.rtl_flist)
     build_root = project_path(project_root, args.build_dir)
     makefile = project_path(project_root, args.cocotb_makefile)
 
@@ -231,25 +285,11 @@ def main() -> int:
             print("No RTL unit tests are registered.")
             return 0
         module_sources = index_rendered_modules(rtl_dir)
-        common_sources = [
-            path
-            for path in [
-                project_root
-                / "third_party"
-                / "taxi"
-                / "src"
-                / "axi"
-                / "rtl"
-                / "taxi_axil_if.sv",
-                rtl_dir / "config_pkg.sv",
-            ]
-            if path.is_file()
-        ]
+        common_sources = load_rtl_filelist(project_root, rtl_dir, rtl_flist)
     except UnitTestError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    failures: list[str] = []
     for entry in entries:
         module_name = str(entry["module_name"])
         framework = str(entry["test_framework"])
@@ -283,9 +323,7 @@ def main() -> int:
                 manifest_path=manifest_path,
                 source_path=source_path,
                 dependency_paths=dependency_paths,
-                common_sources=[
-                    path for path in common_sources if path != source_path
-                ],
+                common_sources=common_sources,
                 module_name=module_name,
                 test_path=str(entry["test_path"]),
                 use_wrapper=bool(entry["use_wrapper"]),
@@ -293,16 +331,14 @@ def main() -> int:
                 build_root=build_root,
             )
             if return_code:
-                failures.append(module_name)
+                print(f"\nUnit test failed: {module_name}", file=sys.stderr)
+                return 1
         except UnitTestError as error:
             print(f"error: {error}", file=sys.stderr)
-            failures.append(module_name)
+            print(f"Unit test failed: {module_name}", file=sys.stderr)
+            return 1
 
-    if failures:
-        print(f"\nUnit tests failed: {', '.join(failures)}", file=sys.stderr)
-        return 1
-
-    print(f"\nAll {len(entries)} RTL unit test(s) passed.")
+    print(f"\nAll {len(entries)} RTL unit test(s) passed ;)")
     return 0
 
 
