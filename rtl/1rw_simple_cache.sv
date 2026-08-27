@@ -34,15 +34,8 @@ module simple_cache_1rw #(
     taxi_axil_if.wr_mst m_axil_wr,
     taxi_axil_if.rd_mst m_axil_rd,
 
-    // Coherency bus
-    input logic coh_bus_req_rdy_i,
-    output coh_bus_op coh_bus_req_op_o,
-    output logic [ADDR_WIDTH-1:0] coh_bus_req_addr_o,
-    output logic coh_bus_req_val_o,
-
-    input logic coh_bus_rsp_val_i,
-    input logic coh_bus_shared_i,
-    output logic coh_bus_rsp_rdy_o
+    // Coherency-bus request/response interface.
+    coh_cache2bus_req.if_slv cache2bus_req
 );
 
     localparam int unsigned CACHE_BYTES = CACHE_SIZE_KIB * 1024;
@@ -130,14 +123,14 @@ module simple_cache_1rw #(
         .rsp_val_o(coh_rsp_val_o),
 
         // Coherence-bus-controller blocking request/response interface.
-        .coh_bus_req_rdy_i(coh_bus_req_rdy_i),
-        .coh_bus_req_op_o(coh_bus_req_op_o),
-        .coh_bus_req_addr_o(coh_bus_req_addr_o),
-        .coh_bus_req_val_o(coh_bus_req_val_o),
+        .coh_bus_req_rdy_i(cache2bus_req.req_rdy),
+        .coh_bus_req_op_o(cache2bus_req.bus_op),
+        .coh_bus_req_addr_o(cache2bus_req.req_addr),
+        .coh_bus_req_val_o(cache2bus_req.req_val),
 
-        .coh_bus_rsp_val_i(coh_bus_rsp_val_i),
-        .coh_bus_shared_i(coh_bus_shared_i),
-        .coh_bus_rsp_rdy_o(coh_bus_rsp_rdy_o)
+        .coh_bus_rsp_val_i(cache2bus_req.rsp_val),
+        .coh_bus_shared_i(cache2bus_req.rsp_shared),
+        .coh_bus_rsp_rdy_o(cache2bus_req.rsp_rdy)
     );
 
     always_comb begin

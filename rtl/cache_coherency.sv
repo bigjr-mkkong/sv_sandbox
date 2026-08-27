@@ -5,7 +5,7 @@ import config_pkg::*;
 {% do unit_test(
     module_name = "cache_coherency_local",
     test_framework = "cocotb",
-    use_wrapper = false,
+    use_wrapper = true,
     test_path = "dv/cocotb_benches/cache_coherency_tb.py",
     rtl_dependencies = ["MESI_protocol.sv"]) %}
 module cache_coherency_local #(
@@ -156,7 +156,7 @@ module cache_coherency_local #(
 endmodule
 
 
-module cache_coherency_bus (
+module cache_coherency_global (
     input logic clk_i,
     input logic rst_ni
 

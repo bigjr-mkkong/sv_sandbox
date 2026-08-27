@@ -1,0 +1,12 @@
+- Write miss performs BusRdX → full-line LLC read → replace one 64-bit word → install M/dirty.
+- Coherence controller serializes requests with round-robin arbitration and queries other caches in parallel.
+- Controller remains locked until the requester reports its final line installation.
+- Query FSM is independent and has priority over local cache commits.
+- LLC ownership uses NOT_IN_USE, MAIN_FSM, and COH_FSM; coherence wins simultaneous acquisition but cannot
+  preempt an active AXI transaction.
+
+- Both FSMs submit a generic cache_update_t bundle through one cache write port.
+- An external query locks its direct-mapped index until writeback and MESI update finish.
+- New upstream accesses to that index are backpressured.
+- Already accepted conflicting requests retain their request registers and replay lookup after unlock.
+- No separate snoop judger is required; the query FSM can generate the external update bundle directly.

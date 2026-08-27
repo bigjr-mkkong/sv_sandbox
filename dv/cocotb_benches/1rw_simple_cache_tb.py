@@ -63,9 +63,9 @@ class CoherenceBusResponder:
         self.dut = dut
         self.shared = False
         self.requests = []
-        dut.coh_bus_req_rdy_i.value = 1
-        dut.coh_bus_rsp_val_i.value = 0
-        dut.coh_bus_shared_i.value = 0
+        dut.coh_bus_req.req_rdy.value = 1
+        dut.coh_bus_req.rsp_val.value = 0
+        dut.coh_bus_req.rsp_shared.value = 0
         cocotb.start_soon(self._run())
 
     async def _run(self):
@@ -73,34 +73,34 @@ class CoherenceBusResponder:
             await RisingEdge(self.dut.clk_i)
 
             if not self.dut.rst_ni.value:
-                self.dut.coh_bus_req_rdy_i.value = 1
-                self.dut.coh_bus_rsp_val_i.value = 0
-                self.dut.coh_bus_shared_i.value = 0
+                self.dut.coh_bus_req.req_rdy.value = 1
+                self.dut.coh_bus_req.rsp_val.value = 0
+                self.dut.coh_bus_req.rsp_shared.value = 0
                 continue
 
             response_accepted = (
-                self.dut.coh_bus_rsp_val_i.value
-                and self.dut.coh_bus_rsp_rdy_o.value
+                self.dut.coh_bus_req.rsp_val.value
+                and self.dut.coh_bus_req.rsp_rdy.value
             )
             request_accepted = (
-                self.dut.coh_bus_req_val_o.value
-                and self.dut.coh_bus_req_rdy_i.value
+                self.dut.coh_bus_req.req_val.value
+                and self.dut.coh_bus_req.req_rdy.value
             )
 
             if response_accepted:
-                self.dut.coh_bus_rsp_val_i.value = 0
-                self.dut.coh_bus_req_rdy_i.value = 1
+                self.dut.coh_bus_req.rsp_val.value = 0
+                self.dut.coh_bus_req.req_rdy.value = 1
 
             if request_accepted:
                 self.requests.append(
                     (
-                        int(self.dut.coh_bus_req_op_o.value),
-                        int(self.dut.coh_bus_req_addr_o.value),
+                        int(self.dut.coh_bus_req.bus_op.value),
+                        int(self.dut.coh_bus_req.req_addr.value),
                     )
                 )
-                self.dut.coh_bus_req_rdy_i.value = 0
-                self.dut.coh_bus_shared_i.value = int(self.shared)
-                self.dut.coh_bus_rsp_val_i.value = 1
+                self.dut.coh_bus_req.req_rdy.value = 0
+                self.dut.coh_bus_req.rsp_shared.value = int(self.shared)
+                self.dut.coh_bus_req.rsp_val.value = 1
 
 
 class CacheTB:
