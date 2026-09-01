@@ -16,9 +16,9 @@ package config_pkg;
 
     typedef enum logic [1:0] {
         BusNOP,
-        BusRd,   // Dirty snoopers must supply or write back their data.
-        BusRd_Ex, // MESI BusRdX: fetch and invalidate other cached copies.
-        BusSync   // MESI BusUpgr: invalidate shared copies without a fetch.
+        BusRd,   // Fetch the line; a Modified snooper must write back its data.
+        BusRdX,  // Fetch the line and invalidate all other cached copies.
+        BusUpgr  // Invalidate Shared copies without fetching the line.
     } coh_bus_op;
 
 endpackage
@@ -37,7 +37,7 @@ interface upstream_if #(
     logic [DATA_WIDTH-1:0] rsp_data;
     logic                  rsp_rdy;
 
-    modport if_mst (
+    modport if_src (
         output req_val,
         output req_addr,
         output req_data,
@@ -49,7 +49,7 @@ interface upstream_if #(
         output rsp_rdy
     );
 
-    modport if_slv (
+    modport if_sink (
         input  req_val,
         input  req_addr,
         input  req_data,
@@ -64,24 +64,28 @@ endinterface
 
 
 // Cache request/response connection to the global coherence controller.
-// Caches use if_slv; the global controller uses if_mst.
+// A cache (or arbiter output) is the request source; the global controller is
+// the request sink. Responses travel in the opposite direction.
 interface coh_cache2bus_req #(
     parameter int unsigned ADDR_WIDTH = config_pkg::ADDR_WIDTH,
-    parameter int unsigned DATA_WIDTH = config_pkg::DATA_WIDTH
+    parameter int unsigned DATA_WIDTH = config_pkg::DATA_WIDTH,
+    parameter int unsigned SRC_WIDTH  = 1
 ) ();
     logic                  req_val;
     config_pkg::coh_bus_op bus_op;
     logic [ADDR_WIDTH-1:0] req_addr;
+    logic [SRC_WIDTH-1:0]  req_src;
     logic                  req_rdy;
 
     logic rsp_val;
     logic rsp_shared;
     logic rsp_rdy;
 
-    modport if_mst (
+    modport if_sink (
         input req_val,
         input bus_op,
         input req_addr,
+        input req_src,
         output req_rdy,
 
         output rsp_val,
@@ -89,10 +93,11 @@ interface coh_cache2bus_req #(
         input rsp_rdy
     );
 
-    modport if_slv (
+    modport if_src (
         output req_val,
         output bus_op,
         output req_addr,
+        output req_src,
         input req_rdy,
 
         input rsp_val,
@@ -102,6 +107,9 @@ interface coh_cache2bus_req #(
 
 endinterface
 
+// Global-controller snoop request/response connection to a cache. The global
+// controller is the request source; each cache is a request sink. Responses
+// travel in the opposite direction.
 interface coh_bus2cache_req #(
     parameter int unsigned ADDR_WIDTH = config_pkg::ADDR_WIDTH,
     parameter int unsigned DATA_WIDTH = config_pkg::DATA_WIDTH
@@ -116,7 +124,7 @@ interface coh_bus2cache_req #(
     logic rsp_shared;
     logic rsp_rdy;
 
-    modport if_mst (
+    modport if_sink (
         input req_val,
         input bus_op,
         input req_addr,
@@ -127,7 +135,7 @@ interface coh_bus2cache_req #(
         input rsp_rdy
     );
 
-    modport if_slv (
+    modport if_src (
         output req_val,
         output bus_op,
         output req_addr,

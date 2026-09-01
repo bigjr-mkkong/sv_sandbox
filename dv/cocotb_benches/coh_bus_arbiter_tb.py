@@ -89,6 +89,7 @@ class CohBusArbiterTB:
         while True:
             await RisingEdge(self.dut.clk_i)
             if self._read_lane(self.dut.slv_req_rdy, port):
+                assert int(self.dut.mst_req_src.value) == port
                 request = CohRequest(
                     bus_op=self._read_lane(self.dut.slv_bus_op, port, 2),
                     address=self._read_lane(

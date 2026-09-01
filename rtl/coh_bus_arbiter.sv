@@ -11,8 +11,8 @@ module n21_coh_cache2bus_arbiter #(
     input logic clk_i,
     input logic rst_ni,
 
-    coh_cache2bus_req.if_mst slvs_i[SLV_CNT],
-    coh_cache2bus_req.if_slv mst_o
+    coh_cache2bus_req.if_sink slvs_i[SLV_CNT],
+    coh_cache2bus_req.if_src  mst_o
 );
 
     typedef enum logic {
@@ -54,6 +54,7 @@ module n21_coh_cache2bus_arbiter #(
         mst_o.req_val  = 1'b0;
         mst_o.bus_op   = config_pkg::BusNOP;
         mst_o.req_addr = '0;
+        mst_o.req_src  = act_mask_q;
         mst_o.rsp_rdy  = 1'b0;
         goto_next = 0;
 

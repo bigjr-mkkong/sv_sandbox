@@ -15,8 +15,9 @@ third_party/taxi/src/axi/rtl/taxi_axil_interconnect.sv
 // Project RTL. Files below rtl/ are rendered into build/rtl/.
 rtl/config_pkg.sv
 rtl/1rw_dumb_dram.sv
+rtl/MESI_protocol.sv
+rtl/cache_coherency.sv
+rtl/coh_bus_arbiter.sv
 rtl/1rw_simple_cache.sv
 rtl/main_module.sv
 rtl/top_module.sv
-rtl/MESI_protocol.sv
-rtl/cache_coherency.sv

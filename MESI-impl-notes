@@ -1,12 +1,103 @@
-- Write miss performs BusRdX → full-line LLC read → replace one 64-bit word → install M/dirty.
-- Coherence controller serializes requests with round-robin arbitration and queries other caches in parallel.
-- Controller remains locked until the requester reports its final line installation.
-- Query FSM is independent and has priority over local cache commits.
-- LLC ownership uses NOT_IN_USE, MAIN_FSM, and COH_FSM; coherence wins simultaneous acquisition but cannot
-  preempt an active AXI transaction.
+# MESI cache implementation notes
 
-- Both FSMs submit a generic cache_update_t bundle through one cache write port.
-- An external query locks its direct-mapped index until writeback and MESI update finish.
-- New upstream accesses to that index are backpressured.
-- Already accepted conflicting requests retain their request registers and replay lookup after unlock.
-- No separate snoop judger is required; the query FSM can generate the external update bundle directly.
+## Scope and topology
+
+- The demo contains two blocking, direct-mapped, write-back L1 caches over one
+  ideal cache-line-wide LLC.
+- A cache sends `coh_cache2bus_req` requests through the request-level
+  round-robin arbiter. The arbiter supplies the requester ID to
+  `cache_coherency_global`.
+- The global controller broadcasts one accepted operation to every other cache
+  through `coh_bus2cache_req`, waits for every snoop response, OR-reduces their
+  pre-transition `shared` results, and replies to the requester.
+- The global controller and arbiter serialize coherence operations. They do not
+  wait for the requester to finish its later LLC fill. A cache that is still
+  using a direct-mapped index backpressures an unsafe snoop for that index.
+
+## Local CPU-side MESI decision
+
+- The CPU address, data, and read/write operation are captured when the blocking
+  upstream request is accepted.
+- Hit and MESI state are evaluated continuously from that captured address and
+  the current cache entry. Do not use the live upstream address after the
+  request handshake.
+- While a cache-to-bus request is unaccepted, its operation is a live decision.
+  A snoop may change the entry and therefore change an outstanding `BusUpgr`
+  into `BusRdX`. This custom blocking bus samples the operation only when
+  `req_val && req_rdy` and permits the payload to change before acceptance.
+- At cache-to-bus request acceptance, the bus operation and both candidate MESI
+  results are frozen. The returned `shared` bit selects the final result.
+- `BusNOP` is consumed inside `cache_coherency_local`; it never reaches the
+  global bus. An accepted `BusNOP` locks its index through the local cache
+  commit so a concurrent snoop cannot make the result stale.
+
+## Cache metadata and allocation
+
+- MESI is the only validity/dirty metadata. `I` means invalid and `M` means
+  dirty; the cache line has no separate valid or dirty bits.
+- A hit requires a tag match and a state other than `I`. A victim requires a
+  writeback exactly when its state is `M`.
+- Every miss performs a full-line LLC read after coherence completes. A write
+  miss merges the requested 64-bit word into that returned line and installs it
+  in `M`; it never zero-fills the untouched words.
+- A normal modified eviction performs a full-line writeback and commits `M->I`
+  before the main FSM proceeds to coherence lookup for the replacement.
+
+## Snoop responder contract
+
+- The local snoop responder is an independent blocking FSM. Its RTL body is
+  intentionally left for the local-coherence implementation step.
+- A snoop request is accepted only when its direct-mapped index is safe. Index
+  comparison is derived by shifting away the cache-line offset; different tags
+  mapping to the same index conflict.
+- A snoop may be accepted while another cache-to-bus request from this cache is
+  mutable and unaccepted. This prevents simultaneous requests from deadlocking
+  and lets the local operation be re-evaluated.
+- Once accepted, the snoop index remains reserved through the snoop response
+  handshake. New upstream accesses to that index are backpressured.
+- `rsp_shared` reports whether the cache held any valid copy before the snoop:
+  `S`, `E`, or `M` all return one; `I` or a tag miss returns zero.
+- `BusRd`: `E/S->S`; `M` writes the full line to LLC and then becomes `S`.
+- `BusRdX`: `E/S->I`; `M` writes the full line to LLC and then becomes `I`.
+- `BusUpgr`: a legal `S` copy becomes `I` without LLC traffic. Encountering
+  `E` or `M` is a MESI invariant violation and should assert in simulation.
+- `bus2cache.rsp_val` is asserted only after any required LLC writeback and the
+  cache-state commit have both completed.
+
+## Shared LLC manager
+
+- Main and snoop FSMs submit one-entry, full-line LLC request bundles to a
+  dedicated manager implemented with its own `always_comb` and `always_ff`.
+- The manager's `COMMIT` state selects a pending coherence request before a
+  pending main request. An already active AXI transaction is never preempted.
+- Read ownership lasts from selection through the `AR` and `R` handshakes.
+- Write ownership lasts through independent `AW` and `W` handshakes and the
+  final `B` handshake.
+- After AXI completion, the manager holds its owner and response stable until
+  that producer consumes the response. Only then does it return to `COMMIT`.
+
+## Cache commit path
+
+- Main and snoop FSMs submit field-enabled cache updates through one selector.
+  A coherence update has priority over a simultaneous main update.
+- Every update writes MESI state. `tag_we` and `data_we` control replacement of
+  the tag and full-line data; snoop state changes and eviction invalidation set
+  both write-enables low.
+- A losing producer holds its update until accepted. The cache array is written
+  by only one sequential block.
+
+## Required end-to-end stress case
+
+- Fill one line into `S` in both caches, then issue simultaneous writes to two
+  different words. The arbiter-selected first writer upgrades, the second
+  request re-evaluates from its snoop-invalidated state and uses `BusRdX`, and
+  the final cache line must contain both word updates.
+
+
+## DV to check later
+    dv/cocotb_benches/1rw_simple_cache_tb.py
+    dv/cocotb_benches/cache_coherency_local_tb.py
+    dv/cocotb_benches/coh_bus_arbiter_tb.py
+    dv/cocotb_wrappers/cache_coherency_local.sv
+    dv/cocotb_wrappers/coh_bus_arbiter.sv
+    dv/cocotb_wrappers/simple_cache_1rw.sv

@@ -10,6 +10,9 @@ module main_module #(
     input  logic                  rst_ni
 );
 
+    localparam int unsigned L1_CACHE_CNT = 2;
+    localparam int unsigned CACHE_SRC_WIDTH = $clog2(L1_CACHE_CNT);
+
     upstream_if #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH)
@@ -30,30 +33,75 @@ module main_module #(
         .ADDR_W(ADDR_WIDTH)
     ) interconn_dram_axil_inst[1]();
 
+    coh_cache2bus_req #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .SRC_WIDTH(CACHE_SRC_WIDTH)
+    ) cache2arbiter_req[L1_CACHE_CNT]();
+
+    coh_cache2bus_req #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .SRC_WIDTH(CACHE_SRC_WIDTH)
+    ) arbiter2global_req();
+
+    coh_bus2cache_req #(
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH)
+    ) global2cache_req[L1_CACHE_CNT]();
+
     simple_cache_1rw #(
         .CACHE_SIZE_KIB(CACHE_SIZE_KIB),
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
-        .DATA_PER_LINE(DATA_PER_LINE)
+        .DATA_PER_LINE(DATA_PER_LINE),
+        .CACHE_ID(0)
     ) simple_cache_1rw_inst0 (
         .clk_i(clk_i),
         .rst_ni(rst_ni),
         .upstream(upstream_cache_if_inst0),
         .m_axil_wr(cache_interconn_axil_inst[0]),
-        .m_axil_rd(cache_interconn_axil_inst[0])
+        .m_axil_rd(cache_interconn_axil_inst[0]),
+        .cache2bus_req(cache2arbiter_req[0]),
+        .bus2cache_req(global2cache_req[0])
     );
 
     simple_cache_1rw #(
         .CACHE_SIZE_KIB(CACHE_SIZE_KIB),
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH),
-        .DATA_PER_LINE(DATA_PER_LINE)
+        .DATA_PER_LINE(DATA_PER_LINE),
+        .CACHE_ID(1)
     ) simple_cache_1rw_inst1 (
         .clk_i(clk_i),
         .rst_ni(rst_ni),
         .upstream(upstream_cache_if_inst1),
         .m_axil_wr(cache_interconn_axil_inst[1]),
-        .m_axil_rd(cache_interconn_axil_inst[1])
+        .m_axil_rd(cache_interconn_axil_inst[1]),
+        .cache2bus_req(cache2arbiter_req[1]),
+        .bus2cache_req(global2cache_req[1])
+    );
+
+    n21_coh_cache2bus_arbiter #(
+        .SLV_CNT(L1_CACHE_CNT),
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH)
+    ) coh_req_arbiter_inst (
+        .clk_i(clk_i),
+        .rst_ni(rst_ni),
+        .slvs_i(cache2arbiter_req),
+        .mst_o(arbiter2global_req)
+    );
+
+    cache_coherency_global #(
+        .L1_CACHE_CNT(L1_CACHE_CNT),
+        .ADDR_WIDTH(ADDR_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH)
+    ) coh_global_inst (
+        .clk_i(clk_i),
+        .rst_ni(rst_ni),
+        .cache_req(arbiter2global_req),
+        .bus_op(global2cache_req)
     );
 
     taxi_axil_interconnect #(

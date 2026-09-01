@@ -41,7 +41,7 @@ module MESI_judger (
                     if (req_is_write_i) begin
                         next_coh_o[0] = COH_Modified;
                         next_coh_o[1] = COH_Modified;
-                        coh_bus_op_o = BusRd_Ex;
+                        coh_bus_op_o = BusRdX;
                     end else begin
                         next_coh_o[0] = COH_Exclusive;
                         next_coh_o[1] = COH_Shared;
@@ -53,7 +53,7 @@ module MESI_judger (
                     if (req_is_write_i) begin
                         next_coh_o[0] = COH_Modified;
                         next_coh_o[1] = COH_Modified;
-                        coh_bus_op_o = BusSync;
+                        coh_bus_op_o = BusUpgr;
                     end else begin
                         next_coh_o[0] = COH_Shared;
                         next_coh_o[1] = COH_Shared;
