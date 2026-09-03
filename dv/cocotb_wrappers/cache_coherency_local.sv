@@ -18,6 +18,7 @@ module cache_coherency_local_unit_test;
     logic       rsp_rdy_i;
     logic [1:0] new_coh_state_o;
     logic       rsp_val_o;
+    logic       local_coh_commit_o;
 
     // Cocotb configuration and visibility for the pseudo coherence bus.
     logic [7:0] bus_rsp_delay_cycles;
@@ -136,6 +137,7 @@ module cache_coherency_local_unit_test;
         .rsp_rdy_i(rsp_rdy_i),
         .new_coh_state_o(new_coh_state),
         .rsp_val_o(rsp_val_o),
+        .local_coh_commit_o(local_coh_commit_o),
 
         .coh_bus_req_rdy_i(coh_bus_req_rdy),
         .coh_bus_req_op_o(coh_bus_req_op),

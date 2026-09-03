@@ -45,24 +45,30 @@
 
 ## Snoop responder contract
 
-- The local snoop responder is an independent blocking FSM. Its RTL body is
-  intentionally left for the local-coherence implementation step.
+- The local snoop responder is an independent blocking FSM for lookup, flush,
+  invalidation, and response.
 - A snoop request is accepted only when its direct-mapped index is safe. Index
   comparison is derived by shifting away the cache-line offset; different tags
   mapping to the same index conflict.
 - A snoop may be accepted while another cache-to-bus request from this cache is
   mutable and unaccepted. This prevents simultaneous requests from deadlocking
   and lets the local operation be re-evaluated.
+- A same-line snoop that will change MESI state while the parent waits for a
+  local coherence result sets the cache COH serialization switch flag. The
+  parent consumes and discards that stale result, then resubmits the captured
+  upstream request after the snoop releases the direct-mapped index.
 - Once accepted, the snoop index remains reserved through the snoop response
   handshake. New upstream accesses to that index are backpressured.
 - `rsp_shared` reports whether the cache held any valid copy before the snoop:
   `S`, `E`, or `M` all return one; `I` or a tag miss returns zero.
-- `BusRd`: `E/S->S`; `M` writes the full line to LLC and then becomes `S`.
-- `BusRdX`: `E/S->I`; `M` writes the full line to LLC and then becomes `I`.
-- `BusUpgr`: a legal `S` copy becomes `I` without LLC traffic. Encountering
-  `E` or `M` is a MESI invariant violation and should assert in simulation.
-- `bus2cache.rsp_val` is asserted only after any required LLC writeback and the
-  cache-state commit have both completed.
+- `BusRd` maps `I->I`, `S->S`, `E->S`, and `M->S`. Only `M->S` flushes the full
+  line to LLC before the remote coherence commit.
+- A `BusRdX` hit flushes the full line to LLC and then submits a remote
+  coherence commit to `I`.
+- A `BusUpgr` hit submits the same remote coherence commit to `I`, but skips the
+  LLC flush.
+- `bus2cache.rsp_val` is asserted only after any required LLC flush and the
+  remote coherence commit have both completed.
 
 ## Shared LLC manager
 
@@ -78,13 +84,21 @@
 
 ## Cache commit path
 
-- Main and snoop FSMs submit field-enabled cache updates through one selector.
-  A coherence update has priority over a simultaneous main update.
+- The local MESI controller marks a local coherence result only in `RESP`, once
+  its decision is complete. The cache captures that result and combines it
+  atomically with any later tag installation or data update.
+- The cache committer owns the cache bank and exposes independent remote and
+  main commit inputs. Both ports remain ready, and different-row commits are
+  written on the same edge.
+- A state-changing same-line snoop marks an in-flight local coherence decision
+  illegal. The parent consumes and discards that result, then re-evaluates the
+  upstream request, so a same-row dual commit must never reach the bank. An RTL
+  assertion checks this invariant; remote priority is only a hardware safety
+  fallback if it is violated.
 - Every update writes MESI state. `tag_we` and `data_we` control replacement of
   the tag and full-line data; snoop state changes and eviction invalidation set
   both write-enables low.
-- A losing producer holds its update until accepted. The cache array is written
-  by only one sequential block.
+- The cache array is written only by the cache committer's sequential block.
 
 ## Required end-to-end stress case
 
@@ -93,11 +107,10 @@
   request re-evaluates from its snoop-invalidated state and uses `BusRdX`, and
   the final cache line must contain both word updates.
 
-
-## DV to check later
-    dv/cocotb_benches/1rw_simple_cache_tb.py
-    dv/cocotb_benches/cache_coherency_local_tb.py
-    dv/cocotb_benches/coh_bus_arbiter_tb.py
-    dv/cocotb_wrappers/cache_coherency_local.sv
-    dv/cocotb_wrappers/coh_bus_arbiter.sv
-    dv/cocotb_wrappers/simple_cache_1rw.sv
+## TODO
+1. Check all generated dv to see if they are correct
+2. Implement another 1rw cache inside cache_committer.sv, this is to see rw port influence over PPA
+3. Pull OpenROAD for PPA estimation
+4. Modify cache size and use supported SRAM module to replace current simple cache[]
+5. Dump renderer verilog into OpenROAD to see the Area overhead of using 2rw instead of 1
+6. Also vary cache size to see the area overhead

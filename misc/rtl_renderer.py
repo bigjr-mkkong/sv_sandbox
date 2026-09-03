@@ -14,26 +14,6 @@ SV_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 SUPPORTED_TEST_FRAMEWORKS = {"cocotb"}
 
 
-def validate_config(config: object) -> dict:
-    """Validate the common fields of configured module instances."""
-    if not isinstance(config, dict):
-        raise ValueError("the top level of config.json must be a JSON object")
-
-    for instance_name, module_config in config.items():
-        if not isinstance(module_config, dict):
-            raise ValueError(f"{instance_name} must be a JSON object")
-        if not isinstance(module_config.get("ENABLE"), bool):
-            raise ValueError(f"{instance_name}.ENABLE must be true or false")
-
-        module_name = module_config.get("module_name")
-        if not isinstance(module_name, str) or not SV_IDENTIFIER.fullmatch(module_name):
-            raise ValueError(
-                f"{instance_name}.module_name must be a SystemVerilog identifier"
-            )
-
-    return config
-
-
 def unit_test(
     *,
     module_name: str,
@@ -81,7 +61,9 @@ def render_tree(
     config_path: Path,
     unit_test_manifest: Path | None = None,
 ) -> None:
-    config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("the top level of config.json must be a JSON object")
     registered_unit_tests: list[dict[str, object]] = []
     registered_modules: set[str] = set()
 

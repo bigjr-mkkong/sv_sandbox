@@ -18,6 +18,9 @@ rtl/1rw_dumb_dram.sv
 rtl/MESI_protocol.sv
 rtl/cache_coherency.sv
 rtl/coh_bus_arbiter.sv
+rtl/cache_committer.sv
+rtl/cache_coherency_bus_responder.sv
+rtl/LLC_committer.sv
 rtl/1rw_simple_cache.sv
 rtl/main_module.sv
 rtl/top_module.sv

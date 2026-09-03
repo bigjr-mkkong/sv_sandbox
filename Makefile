@@ -39,6 +39,10 @@ SIM_BINARY := $(SIM_DIR)/V$(TOP_TB)
 
 YOSYS_DATDIR = $(shell yosys-config --datdir 2>/dev/null)
 YOSYS_NETLIST := build/yosys/synth.v
+ORFS_HOME ?= /home/michael/Projects/playground/verilog/OpenROAD-flow-scripts
+ORFS_IMAGE ?= openroad/flow-ubuntu22.04-builder:local
+ORFS_DESIGN_CONFIG ?= /work/openroad/config.mk
+DEFAULT_GOAL ?= all
 ICE_DIR := build/icebreaker
 ICE_PLL := $(ICE_DIR)/icebreaker_pll.v
 ICE_NETLIST := $(ICE_DIR)/synth.v
@@ -48,7 +52,7 @@ ICE_ASC := $(ICE_DIR)/icebreaker.asc
 ICE_BITSTREAM := $(ICE_DIR)/icebreaker.bit
 VIVADO_BITSTREAM := synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
 
-.PHONY: help setup doctor prepare lint compile test test-cocotb unit-test synth yosys \
+.PHONY: help setup doctor prepare lint compile test test-cocotb unit-test synth yosys orfs \
 	test-gls icebreaker-pll icebreaker-synth icebreaker-bitstream test-icebreaker-gls \
 	check-vivado-sources vivado-bitstream program-icebreaker flash-icebreaker program-basys3 \
 	check clean FORCE
@@ -63,8 +67,11 @@ help:
 	@echo "  make compile               Compile the SystemVerilog testbench"
 	@echo "  make test                  Run the SystemVerilog testbench"
 	@echo "  make test-cocotb           Run the RTL cocotb test"
-	@echo "  make unit-test             Run registered RTL unit tests"
-	@echo "  make synth                 Build a generic Yosys netlist"
+	@echo "  make unit-test             Run registered RTL unit tests(cocotb only)"
+	@echo "  make synth                 Build a generic Yosys netlist(Only check if code is synthesizable)"
+	@echo "  make orfs DEFAULT_GOAL=<choice>"
+	@echo "                             Run ORFS through the selected stage (default: all)"
+	@echo "                             DEFAULT_GOAL choices: synth floorplan place cts route finish all"
 	@echo "  make test-gls              Test the generic post-synthesis netlist"
 	@echo "  make icebreaker-pll        Generate the iCEBreaker PLL source"
 	@echo "  make icebreaker-bitstream  Build the iCEBreaker bitstream"
@@ -129,6 +136,12 @@ $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
 		-l build/yosys/yosys.log
 
 synth yosys: $(YOSYS_NETLIST)
+
+orfs:
+	@$(PYTHON) -c 'import json, pathlib, sys; config = json.loads(pathlib.Path("rtl/config.json").read_text()); sys.exit(0 if config.get("RENDER_OPTION", {}).get("SYNTH") is True else "error: make orfs requires RENDER_OPTION.SYNTH=true")'
+	$(MAKE) prepare
+	OR_IMAGE=$(ORFS_IMAGE) $(ORFS_HOME)/flow/util/docker_shell -- \
+		make DESIGN_CONFIG=$(ORFS_DESIGN_CONFIG) $(DEFAULT_GOAL)
 
 test-gls: $(YOSYS_NETLIST) Makefile.cocotb dv/cocotb_benches/topmod_tb0.py
 	$(MAKE) -f Makefile.cocotb \
@@ -209,7 +222,8 @@ check: doctor lint unit-test test test-cocotb synth test-gls icebreaker-bitstrea
 	test-icebreaker-gls check-vivado-sources
 
 clean:
-	rm -rf build synth/vivado_basys3/build _rtl sim_build \
+	rm -rf build openroad/output logs objects reports results \
+		synth/vivado_basys3/build _rtl sim_build \
 		top_module_tb_sim_dir top_module_tb_gls_dir top_module_gls_dir \
 		__pycache__ misc/__pycache__ dv/cocotb_benches/__pycache__ \
 		dv/ICE_cocotb_benches/__pycache__

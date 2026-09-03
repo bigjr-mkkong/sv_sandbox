@@ -1,4 +1,7 @@
 {
+  "RENDER_OPTION": {
+    "SYNTH": true
+  },
   "UART0": {
     "ENABLE": false,
     "module_name": "taxi_uart",

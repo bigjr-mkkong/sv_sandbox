@@ -69,7 +69,7 @@ endinterface
 interface coh_cache2bus_req #(
     parameter int unsigned ADDR_WIDTH = config_pkg::ADDR_WIDTH,
     parameter int unsigned DATA_WIDTH = config_pkg::DATA_WIDTH,
-    parameter int unsigned SRC_WIDTH  = 1
+    parameter int unsigned SRC_WIDTH  = 4
 ) ();
     logic                  req_val;
     config_pkg::coh_bus_op bus_op;

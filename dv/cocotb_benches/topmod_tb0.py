@@ -1,4 +1,5 @@
 import random
+from dataclasses import dataclass
 
 import cocotb
 from cocotb.clock import Clock
@@ -9,11 +10,43 @@ from dv.cocotb_benches.upstream_if import UpstreamMaster
 
 CLOCK_PERIOD_NS = 10
 TEST_TIMEOUT_US = 100
+SWEEP_TIMEOUT_MS = 10
+SWEEP_MAX_DELAY_CYCLES = 300
 DATA_BYTES = 8
 LINE_BYTES = 64
 CACHE_SIZE_BYTES = 16 * 1024
+CACHE_ROW_COUNT = CACHE_SIZE_BYTES // LINE_BYTES
+CACHE_INDEX_WIDTH = (CACHE_ROW_COUNT - 1).bit_length()
+CACHE_OFFSET_WIDTH = (LINE_BYTES - 1).bit_length()
+CACHE_TAG_WIDTH = 64 - CACHE_INDEX_WIDTH - CACHE_OFFSET_WIDTH
 MASTER_ADDRESS_OFFSET = 1024 * 1024
 ZERO_WORD = bytes(DATA_BYTES)
+ZERO_LINE = bytes(LINE_BYTES)
+
+COH_MODIFIED = 0
+COH_EXCLUSIVE = 1
+COH_SHARED = 2
+COH_INVALID = 3
+
+
+@dataclass(frozen=True)
+class CacheRequest:
+    address: int
+    is_write: bool
+    data: bytes = ZERO_WORD
+
+
+@dataclass(frozen=True)
+class CacheResponse:
+    data: bytes
+    ok: bool = True
+
+
+@dataclass(frozen=True)
+class CacheLineSnapshot:
+    state: int
+    tag: int
+    data: bytes
 
 
 class CacheDramTB:
@@ -22,15 +55,25 @@ class CacheDramTB:
         cocotb.start_soon(Clock(dut.clk_i, CLOCK_PERIOD_NS, unit="ns").start())
 
         self.cpus = []
+        self.cache_instances = []
         for interface_name in (
             "upstream_cache_if_inst0",
             "upstream_cache_if_inst1",
         ):
             upstream = getattr(dut.main_module_inst, interface_name)
             self.cpus.append(UpstreamMaster(upstream, dut.clk_i))
+        for instance_name in (
+            "simple_cache_1rw_inst0",
+            "simple_cache_1rw_inst1",
+        ):
+            self.cache_instances.append(
+                getattr(dut.main_module_inst, instance_name)
+            )
+
+        self.pending_requests = [None] * len(self.cpus)
 
     async def reset(self):
-        self.dut.rxd_i.value = 1
+        # self.dut.rxd_i.value = 1
         self.dut.rst_ni.value = 0
         for _ in range(10):
             await RisingEdge(self.dut.clk_i)
@@ -51,9 +94,122 @@ class CacheDramTB:
         )
         assert response == 0
 
+    async def submit_req(self, cache_index, request):
+        """Assert request valid first and hold it through acceptance."""
+        assert self.pending_requests[cache_index] is None
+        assert request.address % DATA_BYTES == 0
+        assert len(request.data) == DATA_BYTES
+        bus = self.cpus[cache_index].bus
+
+        bus.req_addr.value = request.address
+        bus.req_data.value = int.from_bytes(request.data, "little")
+        bus.req_rw_flag.value = int(request.is_write)
+        bus.req_val.value = 1
+
+        while True:
+            await RisingEdge(self.dut.clk_i)
+            if bus.req_rdy.value:
+                break
+
+        bus.req_val.value = 0
+        bus.req_addr.value = 0
+        bus.req_data.value = 0
+        bus.req_rw_flag.value = 0
+        self.pending_requests[cache_index] = request
+
+    async def read_rsp(self, cache_index):
+        """Assert response ready first, then capture a completed response."""
+        bus = self.cpus[cache_index].bus
+        bus.rsp_rdy.value = 1
+
+        while True:
+            await RisingEdge(self.dut.clk_i)
+            if bus.rsp_val.value:
+                response = CacheResponse(
+                    data=int(bus.rsp_data.value).to_bytes(DATA_BYTES, "little")
+                )
+                break
+
+        bus.rsp_rdy.value = 0
+        return response
+
+    async def wait_rsp(self, cache_index, request):
+        """Consume the response belonging to a previously submitted request."""
+        assert self.pending_requests[cache_index] == request
+        response = await self.read_rsp(cache_index)
+        self.pending_requests[cache_index] = None
+        assert response.ok
+        if request.is_write:
+            assert response.data == ZERO_WORD
+        return response
+
+    async def run_requests(self, requests):
+        """Submit one request per cache concurrently and collect both replies."""
+        assert len(requests) == len(self.cpus)
+        submitters = [
+            cocotb.start_soon(self.submit_req(cache_index, request))
+            for cache_index, request in enumerate(requests)
+        ]
+        for submitter in submitters:
+            await submitter
+
+        waiters = [
+            cocotb.start_soon(self.wait_rsp(cache_index, request))
+            for cache_index, request in enumerate(requests)
+        ]
+        return [await waiter for waiter in waiters]
+
+    async def run_request(self, cache_index, request):
+        await self.submit_req(cache_index, request)
+        return await self.wait_rsp(cache_index, request)
+
+    def cache_line(self, cache_index, address):
+        """Decode one internal packed cache entry without changing DUT state."""
+        row_index = (address >> CACHE_OFFSET_WIDTH) % CACHE_ROW_COUNT
+        entry = (
+            self.cache_instances[cache_index]
+            .cache_committer_inst.cache[row_index]
+        )
+        raw_entry = int(entry.value)
+        line_data_mask = (1 << (LINE_BYTES * 8)) - 1
+        tag_mask = (1 << CACHE_TAG_WIDTH) - 1
+
+        return CacheLineSnapshot(
+            state=(raw_entry >> (LINE_BYTES * 8 + CACHE_TAG_WIDTH)) & 0b11,
+            tag=(raw_entry >> (LINE_BYTES * 8)) & tag_mask,
+            data=(raw_entry & line_data_mask).to_bytes(LINE_BYTES, "little"),
+        )
+
 
 def word(value):
     return value.to_bytes(DATA_BYTES, "little")
+
+
+def line_with_words(*updates):
+    data = bytearray(LINE_BYTES)
+    for word_index, payload in updates:
+        assert 0 <= word_index < LINE_BYTES // DATA_BYTES
+        assert len(payload) == DATA_BYTES
+        offset = word_index * DATA_BYTES
+        data[offset:offset + DATA_BYTES] = payload
+    return bytes(data)
+
+
+def assert_cache_line(tb, cache_index, address, state, data):
+    snapshot = tb.cache_line(cache_index, address)
+    expected_tag = address >> (CACHE_OFFSET_WIDTH + CACHE_INDEX_WIDTH)
+    assert snapshot.state == state, (
+        f"cache={cache_index} address={address:#x} "
+        f"state={snapshot.state} expected={state}"
+    )
+    assert snapshot.tag == expected_tag, (
+        f"cache={cache_index} address={address:#x} "
+        f"tag={snapshot.tag:#x} expected={expected_tag:#x}"
+    )
+    assert snapshot.data == data, (
+        f"cache={cache_index} address={address:#x} "
+        f"data={snapshot.data.hex()} expected={data.hex()}"
+    )
 
 
 def conflicting_address(address, tag_offset=1):
@@ -67,7 +223,7 @@ def private_address(cache_index, address):
 
 
 class SameRowCacheModel:
-    """Reference one cache row with the RTL's no-read write-miss policy."""
+    """Reference one row of a write-back, write-allocate cache."""
 
     def __init__(self):
         self.backing_lines = {}
@@ -79,22 +235,20 @@ class SameRowCacheModel:
     def line_address(address):
         return address & ~(LINE_BYTES - 1)
 
-    def replace(self, line_address, fetch_from_dram):
+    def replace(self, line_address):
         if self.resident_address is not None and self.resident_dirty:
             self.backing_lines[self.resident_address] = bytes(self.resident_data)
 
         self.resident_address = line_address
         self.resident_data = bytearray(
             self.backing_lines.get(line_address, bytes(LINE_BYTES))
-            if fetch_from_dram
-            else bytes(LINE_BYTES)
         )
         self.resident_dirty = False
 
     def read(self, address):
         line_address = self.line_address(address)
         if self.resident_address != line_address:
-            self.replace(line_address, fetch_from_dram=True)
+            self.replace(line_address)
 
         offset = address - line_address
         return bytes(self.resident_data[offset:offset + DATA_BYTES])
@@ -102,8 +256,7 @@ class SameRowCacheModel:
     def write(self, address, data):
         line_address = self.line_address(address)
         if self.resident_address != line_address:
-            # The RTL write-miss policy allocates zero without reading DRAM.
-            self.replace(line_address, fetch_from_dram=False)
+            self.replace(line_address)
 
         offset = address - line_address
         self.resident_data[offset:offset + DATA_BYTES] = data
@@ -160,8 +313,8 @@ async def read_miss_fills_complete_line(dut):
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
-async def write_miss_allocates_without_dram_read(dut):
-    """Each cache write-miss zero-allocates and changes only its target word."""
+async def write_miss_merges_with_a_zeroed_dram_line(dut):
+    """Each cache write-miss fetches the line and changes its target word."""
     tb = CacheDramTB(dut)
     await tb.reset()
     target_index = 5
@@ -243,11 +396,19 @@ async def randomized_conflicting_evictions_preserve_data(dut):
                 model.write(address, payload)
             else:
                 expected = model.read(address)
-                assert await tb.read_word(cache_index, address) == expected
+                actual = await tb.read_word(cache_index, address)
+                assert actual == expected, (
+                    f"cache={cache_index} address={address:#x} "
+                    f"actual={actual.hex()} expected={expected.hex()}"
+                )
 
         for address in sorted(touched_addresses):
             expected = model.read(address)
-            assert await tb.read_word(cache_index, address) == expected
+            actual = await tb.read_word(cache_index, address)
+            assert actual == expected, (
+                f"cache={cache_index} address={address:#x} "
+                f"actual={actual.hex()} expected={expected.hex()}"
+            )
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
@@ -286,21 +447,262 @@ async def simultaneous_evictions_share_the_dram_port(dut):
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
-async def caches_keep_independent_noncoherent_state(dut):
-    """A cache retains stale local data until its own line is replaced."""
+async def snoops_transfer_the_latest_data_between_caches(dut):
+    """Remote reads flush modified data and leave both caches shared."""
     tb = CacheDramTB(dut)
     await tb.reset()
     address = 0x400000
-    conflict = conflicting_address(address)
-    payload = word(0x1C0CA1CA5E000001)
+    first_payload = word(0x1C0CA1CA5E000001)
+    second_payload = word(0x1C0CA1CA5E000002)
 
-    await tb.write_word(0, address, payload)
-    assert await tb.read_word(1, address) == ZERO_WORD
+    await tb.write_word(0, address, first_payload)
+    assert await tb.read_word(1, address) == first_payload
 
-    # Cache 0 writes its dirty line to DRAM, but cache 1 has no invalidation path.
-    await tb.write_word(0, conflict, word(0x1C0CA1CA5E000002))
-    assert await tb.read_word(1, address) == ZERO_WORD
+    await tb.write_word(1, address, second_payload)
+    assert await tb.read_word(1, address) == second_payload
 
-    # Once cache 1 replaces the stale line, its next miss observes DRAM.
-    assert await tb.read_word(1, conflict) == ZERO_WORD
-    assert await tb.read_word(1, address) == payload
+    assert await tb.read_word(0, address) == second_payload
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_simultaneous_read_read(dut):
+    """Concurrent cold reads finish with two Shared zero-filled copies."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x500000
+    requests = [
+        CacheRequest(base + DATA_BYTES, is_write=False),
+        CacheRequest(base + 6 * DATA_BYTES, is_write=False),
+    ]
+
+    responses = await tb.run_requests(requests)
+
+    assert responses[0].data == ZERO_WORD
+    assert responses[1].data == ZERO_WORD
+    assert_cache_line(tb, 0, base, COH_SHARED, ZERO_LINE)
+    assert_cache_line(tb, 1, base, COH_SHARED, ZERO_LINE)
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_simultaneous_read_write(dut):
+    """Concurrent read/write accepts either legal serialized final ordering."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x510000
+    write_payload = word(0x5100000000000005)
+    expected_line = line_with_words((5, write_payload))
+    requests = [
+        CacheRequest(base + DATA_BYTES, is_write=False),
+        CacheRequest(
+            base + 5 * DATA_BYTES,
+            is_write=True,
+            data=write_payload,
+        ),
+    ]
+
+    responses = await tb.run_requests(requests)
+    snapshots = [tb.cache_line(cache_index, base) for cache_index in range(2)]
+    states = tuple(snapshot.state for snapshot in snapshots)
+
+    assert responses[0].data == ZERO_WORD
+    if states == (COH_INVALID, COH_MODIFIED):
+        assert_cache_line(tb, 0, base, COH_INVALID, ZERO_LINE)
+        assert_cache_line(tb, 1, base, COH_MODIFIED, expected_line)
+    elif states == (COH_SHARED, COH_SHARED):
+        assert_cache_line(tb, 0, base, COH_SHARED, expected_line)
+        assert_cache_line(tb, 1, base, COH_SHARED, expected_line)
+    else:
+        raise AssertionError(
+            f"illegal simultaneous read/write final states: {states}"
+        )
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_simultaneous_write_write(dut):
+    """Concurrent writes preserve both words in the final Modified owner."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x520000
+    payloads = [word(0x5200000000000002), word(0x5200000000000005)]
+    expected_line = line_with_words((2, payloads[0]), (5, payloads[1]))
+    requests = [
+        CacheRequest(
+            base + 2 * DATA_BYTES,
+            is_write=True,
+            data=payloads[0],
+        ),
+        CacheRequest(
+            base + 5 * DATA_BYTES,
+            is_write=True,
+            data=payloads[1],
+        ),
+    ]
+
+    await tb.run_requests(requests)
+    snapshots = [tb.cache_line(cache_index, base) for cache_index in range(2)]
+    states = tuple(snapshot.state for snapshot in snapshots)
+
+    assert states in {
+        (COH_INVALID, COH_MODIFIED),
+        (COH_MODIFIED, COH_INVALID),
+    }, f"illegal simultaneous write/write final states: {states}"
+    owner = states.index(COH_MODIFIED)
+    assert_cache_line(tb, owner, base, COH_MODIFIED, expected_line)
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_read_then_read(dut):
+    """A later reader downgrades the first Exclusive copy to Shared."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x530000
+    first = CacheRequest(base + DATA_BYTES, is_write=False)
+    second = CacheRequest(base + 6 * DATA_BYTES, is_write=False)
+
+    assert (await tb.run_request(0, first)).data == ZERO_WORD
+    assert (await tb.run_request(1, second)).data == ZERO_WORD
+
+    assert_cache_line(tb, 0, base, COH_SHARED, ZERO_LINE)
+    assert_cache_line(tb, 1, base, COH_SHARED, ZERO_LINE)
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_read_then_write(dut):
+    """A later writer invalidates the first reader and becomes Modified."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x540000
+    payload = word(0x5400000000000005)
+    expected_line = line_with_words((5, payload))
+    first = CacheRequest(base + DATA_BYTES, is_write=False)
+    second = CacheRequest(
+        base + 5 * DATA_BYTES,
+        is_write=True,
+        data=payload,
+    )
+
+    assert (await tb.run_request(0, first)).data == ZERO_WORD
+    await tb.run_request(1, second)
+
+    assert_cache_line(tb, 0, base, COH_INVALID, ZERO_LINE)
+    assert_cache_line(tb, 1, base, COH_MODIFIED, expected_line)
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_write_then_read(dut):
+    """A later reader receives written data and leaves both copies Shared."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x550000
+    payload = word(0x5500000000000002)
+    expected_line = line_with_words((2, payload))
+    first = CacheRequest(
+        base + 2 * DATA_BYTES,
+        is_write=True,
+        data=payload,
+    )
+    second = CacheRequest(base + 6 * DATA_BYTES, is_write=False)
+
+    await tb.run_request(0, first)
+    assert (await tb.run_request(1, second)).data == ZERO_WORD
+
+    assert_cache_line(tb, 0, base, COH_SHARED, expected_line)
+    assert_cache_line(tb, 1, base, COH_SHARED, expected_line)
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def e2e_write_then_write(dut):
+    """A later writer preserves the first word and becomes Modified."""
+    tb = CacheDramTB(dut)
+    await tb.reset()
+    base = 0x560000
+    payloads = [word(0x5600000000000002), word(0x5600000000000005)]
+    first_line = line_with_words((2, payloads[0]))
+    final_line = line_with_words((2, payloads[0]), (5, payloads[1]))
+    first = CacheRequest(
+        base + 2 * DATA_BYTES,
+        is_write=True,
+        data=payloads[0],
+    )
+    second = CacheRequest(
+        base + 5 * DATA_BYTES,
+        is_write=True,
+        data=payloads[1],
+    )
+
+    await tb.run_request(0, first)
+    await tb.run_request(1, second)
+
+    assert_cache_line(tb, 0, base, COH_INVALID, first_line)
+    assert_cache_line(tb, 1, base, COH_MODIFIED, final_line)
+
+
+@cocotb.test(timeout_time=SWEEP_TIMEOUT_MS, timeout_unit="ms")
+async def e2e_request_offset_sweep(dut):
+    """Preserve ordered results for request offsets from 1 through 300 cycles."""
+    tb = CacheDramTB(dut)
+    scenarios = (
+        ("read/read", False, False),
+        ("read/write", False, True),
+        ("write/read", True, False),
+        ("write/write", True, True),
+    )
+
+    for scenario_index, (name, first_is_write, second_is_write) in enumerate(
+        scenarios
+    ):
+        base = 0x600000 + scenario_index * 0x10000
+        first_payload = word(0x6000000000000002 + scenario_index * 0x100)
+        second_payload = word(0x6000000000000005 + scenario_index * 0x100)
+        first_line = line_with_words((2, first_payload))
+        final_line = line_with_words(
+            *((2, first_payload),) if first_is_write else (),
+            *((5, second_payload),) if second_is_write else (),
+        )
+
+        for delay_cycles in range(1, SWEEP_MAX_DELAY_CYCLES + 1):
+            await tb.reset()
+            requests = (
+                CacheRequest(
+                    base + (2 if first_is_write else 1) * DATA_BYTES,
+                    is_write=first_is_write,
+                    data=first_payload if first_is_write else ZERO_WORD,
+                ),
+                CacheRequest(
+                    base + (5 if second_is_write else 6) * DATA_BYTES,
+                    is_write=second_is_write,
+                    data=second_payload if second_is_write else ZERO_WORD,
+                ),
+            )
+
+            first_task = cocotb.start_soon(tb.run_request(0, requests[0]))
+            for _ in range(delay_cycles):
+                await RisingEdge(dut.clk_i)
+            second_task = cocotb.start_soon(tb.run_request(1, requests[1]))
+            responses = (await first_task, await second_task)
+
+            try:
+                for request, response in zip(requests, responses):
+                    if not request.is_write:
+                        assert response.data == ZERO_WORD
+
+                if name == "read/read":
+                    assert_cache_line(tb, 0, base, COH_SHARED, ZERO_LINE)
+                    assert_cache_line(tb, 1, base, COH_SHARED, ZERO_LINE)
+                elif name == "read/write":
+                    assert_cache_line(tb, 0, base, COH_INVALID, ZERO_LINE)
+                    assert_cache_line(tb, 1, base, COH_MODIFIED, final_line)
+                elif name == "write/read":
+                    assert_cache_line(tb, 0, base, COH_SHARED, final_line)
+                    assert_cache_line(tb, 1, base, COH_SHARED, final_line)
+                else:
+                    assert_cache_line(
+                        tb, 0, base, COH_INVALID, first_line
+                    )
+                    assert_cache_line(
+                        tb, 1, base, COH_MODIFIED, final_line
+                    )
+            except AssertionError as error:
+                raise AssertionError(
+                    f"scenario={name} delay_cycles={delay_cycles}: {error}"
+                ) from error

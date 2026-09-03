@@ -95,9 +95,11 @@ module simple_cache_1rw_unit_test;
     assign c2b_busy_o = c2b_state_q != C2B_IDLE;
 
     // A snoop holds its command/address through request acceptance, optionally
-    // delays response readiness, then waits for the cache-local responder.
+    // delays response readiness, then waits for the cache-local responder. The
+    // local cache-to-bus request may remain pending while snoop mode is active;
+    // this allows serialization-retry timing to be tested directly.
     assign snoop_bus_req.req_val = coherence_test_mode == TEST_SNOOP
-        && snoop_state_q == SNOOP_SUBMIT && !coh_bus_req.req_val;
+        && snoop_state_q == SNOOP_SUBMIT;
     assign snoop_bus_req.bus_op = snoop_op_q;
     assign snoop_bus_req.req_addr = snoop_addr_q;
     assign snoop_bus_req.rsp_rdy = coherence_test_mode == TEST_SNOOP

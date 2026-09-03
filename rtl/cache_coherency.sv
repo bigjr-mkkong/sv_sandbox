@@ -22,9 +22,12 @@ module cache_coherency_local #(
     input coh_state req_coh_i,
     output logic req_rdy_o,
 
+    // A completed response carries the final state. local_coh_commit_o marks
+    // that the state differs from the state used for the accepted decision.
     input logic rsp_rdy_i,
     output coh_state new_coh_state_o,
     output logic rsp_val_o,
+    output logic local_coh_commit_o,
 
     // Coherence-bus-controller blocking request/response interface.
     input logic coh_bus_req_rdy_i,
@@ -51,6 +54,8 @@ module cache_coherency_local #(
     logic req_is_write_d, req_is_write_q;
     coh_state ret_coh_d, ret_coh_q;
     coh_state candidate_coh_d[2], candidate_coh_q[2];
+    logic ret_commit_d, ret_commit_q;
+    logic candidate_commit_d[2], candidate_commit_q[2];
 
     logic begin_mesi_judge;
     logic judged_is_write;
@@ -92,10 +97,14 @@ module cache_coherency_local #(
         ret_coh_d = ret_coh_q;
         candidate_coh_d[0] = candidate_coh_q[0];
         candidate_coh_d[1] = candidate_coh_q[1];
+        ret_commit_d = ret_commit_q;
+        candidate_commit_d[0] = candidate_commit_q[0];
+        candidate_commit_d[1] = candidate_commit_q[1];
 
         req_rdy_o = 1'b0;
         rsp_val_o = 1'b0;
         new_coh_state_o = ret_coh_q;
+        local_coh_commit_o = 1'b0;
 
         coh_bus_req_val_o = 1'b0;
         coh_bus_req_op_o = BusNOP;
@@ -112,6 +121,7 @@ module cache_coherency_local #(
 
                     if (judged_bus_op == BusNOP) begin
                         ret_coh_d = judged_coh[0];
+                        ret_commit_d = judged_coh[0] != effective_coh;
                         state_d = RESP;
                     end else begin
                         state_d = BUS_SUBMIT;
@@ -126,6 +136,8 @@ module cache_coherency_local #(
                 if (coh_bus_req_rdy_i) begin
                     candidate_coh_d[0] = judged_coh[0];
                     candidate_coh_d[1] = judged_coh[1];
+                    candidate_commit_d[0] = judged_coh[0] != effective_coh;
+                    candidate_commit_d[1] = judged_coh[1] != effective_coh;
                     state_d = BUS_WAIT;
                 end
             end
@@ -135,12 +147,14 @@ module cache_coherency_local #(
 
                 if (coh_bus_rsp_val_i) begin
                     ret_coh_d = candidate_coh_q[coh_bus_shared_i];
+                    ret_commit_d = candidate_commit_q[coh_bus_shared_i];
                     state_d = RESP;
                 end
             end
 
             RESP: begin
                 rsp_val_o = 1'b1;
+                local_coh_commit_o = ret_commit_q;
 
                 if (rsp_rdy_i) begin
                     state_d = IDLE;
@@ -161,6 +175,9 @@ module cache_coherency_local #(
             ret_coh_q <= COH_Invalid;
             candidate_coh_q[0] <= COH_Invalid;
             candidate_coh_q[1] <= COH_Invalid;
+            ret_commit_q <= 1'b0;
+            candidate_commit_q[0] <= 1'b0;
+            candidate_commit_q[1] <= 1'b0;
         end else begin
             state_q <= state_d;
             req_addr_q <= req_addr_d;
@@ -168,6 +185,9 @@ module cache_coherency_local #(
             ret_coh_q <= ret_coh_d;
             candidate_coh_q[0] <= candidate_coh_d[0];
             candidate_coh_q[1] <= candidate_coh_d[1];
+            ret_commit_q <= ret_commit_d;
+            candidate_commit_q[0] <= candidate_commit_d[0];
+            candidate_commit_q[1] <= candidate_commit_d[1];
         end
     end
 

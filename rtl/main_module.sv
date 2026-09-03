@@ -7,6 +7,25 @@ module main_module #(
     parameter int unsigned CACHE_SIZE_KIB = 16
 ) (
     input  logic                  clk_i,
+{% if RENDER_OPTION.SYNTH %}
+    input  logic                  cache0_req_val_i,
+    input  logic [ADDR_WIDTH-1:0] cache0_req_addr_i,
+    input  logic [DATA_WIDTH-1:0] cache0_req_data_i,
+    input  logic                  cache0_req_is_write_i,
+    output logic                  cache0_req_rdy_o,
+    output logic                  cache0_rsp_val_o,
+    output logic [DATA_WIDTH-1:0] cache0_rsp_data_o,
+    input  logic                  cache0_rsp_rdy_i,
+
+    input  logic                  cache1_req_val_i,
+    input  logic [ADDR_WIDTH-1:0] cache1_req_addr_i,
+    input  logic [DATA_WIDTH-1:0] cache1_req_data_i,
+    input  logic                  cache1_req_is_write_i,
+    output logic                  cache1_req_rdy_o,
+    output logic                  cache1_rsp_val_o,
+    output logic [DATA_WIDTH-1:0] cache1_rsp_data_o,
+    input  logic                  cache1_rsp_rdy_i,
+{% endif %}
     input  logic                  rst_ni
 );
 
@@ -22,6 +41,26 @@ module main_module #(
         .ADDR_WIDTH(ADDR_WIDTH),
         .DATA_WIDTH(DATA_WIDTH)
     ) upstream_cache_if_inst1();
+
+{% if RENDER_OPTION.SYNTH %}
+    assign upstream_cache_if_inst0.req_val = cache0_req_val_i;
+    assign upstream_cache_if_inst0.req_addr = cache0_req_addr_i;
+    assign upstream_cache_if_inst0.req_data = cache0_req_data_i;
+    assign upstream_cache_if_inst0.req_rw_flag = cache0_req_is_write_i;
+    assign cache0_req_rdy_o = upstream_cache_if_inst0.req_rdy;
+    assign cache0_rsp_val_o = upstream_cache_if_inst0.rsp_val;
+    assign cache0_rsp_data_o = upstream_cache_if_inst0.rsp_data;
+    assign upstream_cache_if_inst0.rsp_rdy = cache0_rsp_rdy_i;
+
+    assign upstream_cache_if_inst1.req_val = cache1_req_val_i;
+    assign upstream_cache_if_inst1.req_addr = cache1_req_addr_i;
+    assign upstream_cache_if_inst1.req_data = cache1_req_data_i;
+    assign upstream_cache_if_inst1.req_rw_flag = cache1_req_is_write_i;
+    assign cache1_req_rdy_o = upstream_cache_if_inst1.req_rdy;
+    assign cache1_rsp_val_o = upstream_cache_if_inst1.rsp_val;
+    assign cache1_rsp_data_o = upstream_cache_if_inst1.rsp_data;
+    assign upstream_cache_if_inst1.rsp_rdy = cache1_rsp_rdy_i;
+{% endif %}
 
     taxi_axil_if #(
         .DATA_W(DATA_WIDTH * DATA_PER_LINE),

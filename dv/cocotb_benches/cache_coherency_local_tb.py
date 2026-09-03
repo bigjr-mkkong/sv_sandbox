@@ -50,11 +50,16 @@ class MESI_expected:
             (effective_state, request.is_write)
         ]
         final_state = shared_state if shared else no_shared_state
-        self._pending = (request.address, final_state, bus_op)
+        self._pending = (
+            request.address,
+            effective_state,
+            final_state,
+            bus_op,
+        )
 
     def expected(self):
         assert self._pending is not None
-        _, final_state, bus_op = self._pending
+        _, _, final_state, bus_op = self._pending
         if bus_op == BUS_NOP:
             return (final_state,)
         return (final_state, bus_op)
@@ -62,7 +67,8 @@ class MESI_expected:
     def commit_rsp(self, actual):
         expected = self.expected()
         assert actual[: len(expected)] == expected
-        address, final_state, _ = self._pending
+        address, initial_state, final_state, _ = self._pending
+        assert actual[2] == (final_state != initial_state)
         self._states[address] = final_state
         self._pending = None
 
@@ -132,6 +138,7 @@ class CacheCoherencyTB:
                 self._captured_rsp = (
                     int(self.dut.new_coh_state_o.value),
                     int(self.dut.bus_op_out_q.value),
+                    bool(self.dut.local_coh_commit_o.value),
                 )
                 await RisingEdge(self.dut.clk_i)
                 return
@@ -285,9 +292,11 @@ async def bus_delay_blocks_cache_response(dut):
     for _ in range(delay_cycles):
         await FallingEdge(dut.clk_i)
         assert int(dut.rsp_val_o.value) == 0
+        assert int(dut.local_coh_commit_o.value) == 0
 
     await FallingEdge(dut.clk_i)
     assert int(dut.rsp_val_o.value) == 0
+    assert int(dut.local_coh_commit_o.value) == 0
     assert int(dut.coh_bus_rsp_rdy_o.value) == 1
 
     await RisingEdge(dut.clk_i)

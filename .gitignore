@@ -6,5 +6,7 @@ __pycache__
 *.fst
 *.vcd
 build
+signal.md
 venv/
 .rtl_flist.tmp
+/openroad/output/

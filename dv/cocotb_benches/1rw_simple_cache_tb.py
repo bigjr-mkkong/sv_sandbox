@@ -493,3 +493,106 @@ async def upstream_response_and_downstream_axil_backpressure(dut):
     expected_old[1] = updated
     assert unpack_line(tb.ram.read(old_base, LINE_BYTES)) == expected_old
     tb.coherence.assert_expectations()
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def bus_read_snoop_flushes_then_downgrades_a_modified_hit(dut):
+    """A BusRd hit writes back M data and retains the line in S."""
+    tb = CacheTB(dut)
+    tb.coherence.select_cache2bus()
+    await tb.reset()
+    base = line_address(cache_address(tag=5, index=37))
+    backing = [0x5100 + index for index in range(DATA_PER_LINE)]
+    updated = 0xA55A0123456789EF
+    tb.ram.write(base, pack_line(backing))
+
+    tb.coherence.expect_cache2bus(BUS_RD, base, shared=False)
+    assert await tb.read_word(base + 4 * DATA_BYTES) == backing[4]
+    await tb.write_word(base + 4 * DATA_BYTES, updated)
+    tb.coherence.assert_expectations()
+
+    tb.coherence.select_snoop()
+    shared = await tb.coherence.send_snoop(
+        BUS_RD,
+        base,
+        response_ready_delay_cycles=7,
+    )
+    assert shared
+    expected = backing.copy()
+    expected[4] = updated
+    assert unpack_line(tb.ram.read(base, LINE_BYTES)) == expected
+
+    # M downgraded to S, so this access must hit without another bus request.
+    tb.coherence.select_cache2bus()
+    assert await tb.read_word(base + 4 * DATA_BYTES) == updated
+    tb.coherence.assert_expectations()
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def bus_upgrade_snoop_invalidates_without_flushing(dut):
+    """BusUpgr invalidates a hit without overwriting the LLC line."""
+    tb = CacheTB(dut)
+    tb.coherence.select_cache2bus()
+    await tb.reset()
+    base = line_address(cache_address(tag=7, index=43))
+    cached = [0x7100 + index for index in range(DATA_PER_LINE)]
+    newer_llc = [0x7F00 + index for index in range(DATA_PER_LINE)]
+    tb.ram.write(base, pack_line(cached))
+
+    tb.coherence.expect_cache2bus(BUS_RD, base, shared=True)
+    assert await tb.read_word(base + 2 * DATA_BYTES) == cached[2]
+    tb.coherence.assert_expectations()
+    tb.ram.write(base, pack_line(newer_llc))
+
+    tb.coherence.select_snoop()
+    assert await tb.coherence.send_snoop(BUS_UPGR, base)
+    assert unpack_line(tb.ram.read(base, LINE_BYTES)) == newer_llc
+
+    tb.coherence.select_cache2bus()
+    tb.coherence.expect_cache2bus(BUS_RD, base, shared=False)
+    assert await tb.read_word(base + 2 * DATA_BYTES) == newer_llc[2]
+    tb.coherence.assert_expectations()
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def same_line_snoop_retries_inflight_local_coherence(dut):
+    """Discard a local decision invalidated while waiting for the bus."""
+    tb = CacheTB(dut)
+    tb.coherence.select_cache2bus()
+    await tb.reset()
+    base = line_address(cache_address(tag=6, index=47))
+    backing = [0x6100 + index for index in range(DATA_PER_LINE)]
+    updated = 0xC011CA7E5E21A11E
+    tb.ram.write(base, pack_line(backing))
+
+    # Install the line in S so the pending local write initially selects
+    # BusUpgr, then prevent that request from reaching the pseudo bus.
+    tb.coherence.expect_cache2bus(BUS_RD, base, shared=True)
+    assert await tb.read_word(base + DATA_BYTES) == backing[1]
+    tb.dut.c2b_accept_enable.value = 0
+    write_task = cocotb.start_soon(
+        tb.write_word(base + DATA_BYTES, updated)
+    )
+
+    for _ in range(20):
+        await RisingEdge(dut.clk_i)
+        if dut.coh_bus_req.req_val.value:
+            break
+    assert dut.coh_bus_req.req_val.value
+    assert int(dut.coh_bus_req.bus_op.value) == BUS_UPGR
+
+    # The hitting snoop invalidates the line while the local decision is in
+    # flight. Its response must be consumed later as a stale decision.
+    tb.coherence.select_snoop()
+    assert await tb.coherence.send_snoop(BUS_UPGR, base)
+
+    # Re-evaluation changes BusUpgr to BusRdX. The first result is discarded by
+    # the serialization switch; the second result completes the local write.
+    tb.coherence.select_cache2bus()
+    tb.dut.c2b_accept_enable.value = 1
+    tb.coherence.expect_cache2bus(BUS_RDX, base, shared=False)
+    tb.coherence.expect_cache2bus(BUS_RDX, base, shared=False)
+    await write_task
+
+    assert await tb.read_word(base + DATA_BYTES) == updated
+    tb.coherence.assert_expectations()
