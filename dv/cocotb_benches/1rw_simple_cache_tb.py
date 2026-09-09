@@ -3,7 +3,7 @@ import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import FallingEdge, RisingEdge, Timer
 from cocotbext.axi import AxiLiteBus, AxiLiteRam
 
 from dv.cocotb_benches.MESI_protocol_tb import BUS_RD, BUS_RDX, BUS_UPGR
@@ -127,14 +127,13 @@ class PseudoCoherenceBus:
         await RisingEdge(self.dut.clk_i)
         self.dut.snoop_start.value = 0
 
-        while not self.dut.snoop_done_o.value:
-            await RisingEdge(self.dut.clk_i)
-
-        shared = bool(self.dut.snoop_rsp_shared_o.value)
         self.dut.snoop_done_rdy.value = 1
-        await RisingEdge(self.dut.clk_i)
-        self.dut.snoop_done_rdy.value = 0
-        return shared
+        while True:
+            await RisingEdge(self.dut.clk_i)
+            if self.dut.snoop_done_o.value:
+                shared = bool(self.dut.snoop_rsp_shared_o.value)
+                self.dut.snoop_done_rdy.value = 0
+                return shared
 
     def assert_expectations(self):
         assert self.mode == TEST_CACHE2BUS
@@ -157,13 +156,21 @@ class CacheTB:
             size=RAM_SIZE,
         )
 
-    async def reset(self):
+    async def reset(self, *, wait_for_init=True):
+        """Wait for coherence initialization unless testing the reset window."""
         self.dut.rst_ni.value = 0
         for _ in range(10):
             await RisingEdge(self.dut.clk_i)
         self.dut.rst_ni.value = 1
         for _ in range(2):
             await RisingEdge(self.dut.clk_i)
+        if wait_for_init:
+            for _ in range(ROW_COUNT + 1):
+                await FallingEdge(self.dut.clk_i)
+                if int(self.dut.dut.cache_reset_fin.value):
+                    await RisingEdge(self.dut.clk_i)
+                    return
+            raise AssertionError("cache initialization did not finish")
 
     async def read_word(self, address, *, response_delay_cycles=0):
         return await self.master.read(
@@ -177,6 +184,65 @@ class CacheTB:
             response_delay_cycles=response_delay_cycles,
         )
         assert response == 0
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def reset_initialization_holds_upstream_request(dut):
+    """A request held valid during the reset sweep is accepted only afterward."""
+    tb = CacheTB(dut)
+    tb.coherence.select_cache2bus()
+    await tb.reset(wait_for_init=False)
+    base = cache_address(tag=1, index=255)
+    tb.coherence.expect_cache2bus(BUS_RD, base)
+    pending = cocotb.start_soon(tb.read_word(base))
+    blocked_cycles = 0
+    for _ in range(ROW_COUNT + 1):
+        await FallingEdge(dut.clk_i)
+        if dut.dut.cache_reset_fin.value:
+            break
+        blocked_cycles += 1
+        assert dut.upstream.req_val.value
+        assert not dut.upstream.req_rdy.value
+        assert not dut.dut.responder_idx_avail.value
+        assert not dut.upstream.rsp_val.value
+        assert int(dut.c2b_req_count_o.value) == 0
+    else:
+        raise AssertionError("cache initialization never completed")
+    assert blocked_cycles > 0
+    assert await pending == 0
+    tb.coherence.assert_expectations()
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def read_hit_response_is_valid_three_cycles_after_acceptance(dut):
+    """The IDLE lookup and BusNOP bypasses remove both submit bubbles."""
+    tb = CacheTB(dut)
+    tb.coherence.select_cache2bus()
+    await tb.reset()
+    for shared in (False, True):
+        base = cache_address(tag=2, index=20 + int(shared))
+        backing = [0x1230 + word for word in range(DATA_PER_LINE)]
+        tb.ram.write(base, pack_line(backing))
+        tb.coherence.expect_cache2bus(BUS_RD, base, shared=shared)
+        assert await tb.read_word(base) == backing[0]
+
+        pending = cocotb.start_soon(tb.read_word(base + DATA_BYTES))
+        for _ in range(10):
+            await FallingEdge(dut.clk_i)
+            if dut.upstream.req_val.value and dut.upstream.req_rdy.value:
+                break
+        else:
+            raise AssertionError("uncontended hit request was not accepted")
+        await RisingEdge(dut.clk_i)  # T0: CPU and SRAM lookup acceptance.
+        await Timer(1, unit="ns")
+        assert not dut.upstream.rsp_val.value
+        for elapsed in range(1, 4):
+            await RisingEdge(dut.clk_i)
+            await Timer(1, unit="ns")
+            assert bool(dut.upstream.rsp_val.value) == (elapsed == 3)
+        assert int(dut.upstream.rsp_data.value) == backing[1]
+        assert await pending == backing[1]
+        tb.coherence.assert_expectations()
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")

@@ -122,7 +122,12 @@ module cache_coherency_local #(
                     if (judged_bus_op == BusNOP) begin
                         ret_coh_d = judged_coh[0];
                         ret_commit_d = judged_coh[0] != effective_coh;
-                        state_d = RESP;
+                        // Complete on the request edge when the cache can
+                        // consume the decision; otherwise hold it in RESP.
+                        rsp_val_o = 1'b1;
+                        new_coh_state_o = judged_coh[0];
+                        local_coh_commit_o = ret_commit_d;
+                        state_d = rsp_rdy_i ? IDLE : RESP;
                     end else begin
                         state_d = BUS_SUBMIT;
                     end

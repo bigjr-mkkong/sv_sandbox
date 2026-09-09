@@ -25,11 +25,7 @@ module cache_coherency_bus_responder #(
     input  logic                        idx_avail_i,
     output logic                        idx_in_use_o,
     output logic [INDEX_BITS-1:0]       active_idx_o,
-    output logic [INDEX_BITS-1:0]       lookup_idx_o,
-    output logic [TAG_WIDTH-1:0]        lookup_tag_o,
-    input  logic                        lookup_hit_i,
-    input  coh_state                    lookup_coh_i,
-    input  logic [LINE_WIDTH-1:0]       lookup_data_i,
+    cache_snoop_if.producer             remote_snoop,
 
     output logic                        llc_req_val_o,
     input  logic                        llc_req_rdy_i,
@@ -43,6 +39,8 @@ module cache_coherency_bus_responder #(
 );
     typedef enum logic [2:0] {
         IDLE,
+        LOOKUP_SUBMIT,
+        LOOKUP_WAIT,
         LLC_SUBMIT,
         LLC_WAIT,
         REMOTE_COMMIT,
@@ -51,29 +49,20 @@ module cache_coherency_bus_responder #(
 
     state_e state_d, state_q;
     logic [ADDR_WIDTH-1:0] req_addr_d, req_addr_q;
+    coh_bus_op bus_op_d, bus_op_q;
     logic lookup_hit_d, lookup_hit_q;
     logic [LINE_WIDTH-1:0] lookup_data_d, lookup_data_q;
     coh_state remote_coh_state_d, remote_coh_state_q;
 
     logic [INDEX_BITS-1:0] incoming_idx;
-    logic [TAG_WIDTH-1:0] incoming_tag;
 
     assign incoming_idx = INDEX_BITS'(
         bus2cache_req.req_addr >> OFFSET_WIDTH
     );
-    assign incoming_tag = TAG_WIDTH'(
-        bus2cache_req.req_addr >> (OFFSET_WIDTH + INDEX_BITS)
-    );
-
-    assign lookup_idx_o = state_q == IDLE
-        ? incoming_idx : INDEX_BITS'(req_addr_q >> OFFSET_WIDTH);
-    assign lookup_tag_o = state_q == IDLE
-        ? incoming_tag
-        : TAG_WIDTH'(req_addr_q >> (OFFSET_WIDTH + INDEX_BITS));
-
     always_comb begin
         state_d = state_q;
         req_addr_d = req_addr_q;
+        bus_op_d = bus_op_q;
         lookup_hit_d = lookup_hit_q;
         lookup_data_d = lookup_data_q;
         remote_coh_state_d = remote_coh_state_q;
@@ -83,7 +72,15 @@ module cache_coherency_bus_responder #(
         bus2cache_req.rsp_shared = lookup_hit_q;
 
         idx_in_use_o = state_q != IDLE;
-        active_idx_o = lookup_idx_o;
+        active_idx_o = state_q == IDLE
+            ? incoming_idx : INDEX_BITS'(req_addr_q >> OFFSET_WIDTH);
+
+        remote_snoop.req_val = 1'b0;
+        remote_snoop.idx = INDEX_BITS'(req_addr_q >> OFFSET_WIDTH);
+        remote_snoop.tag = TAG_WIDTH'(
+            req_addr_q >> (OFFSET_WIDTH + INDEX_BITS)
+        );
+        remote_snoop.rsp_rdy = 1'b0;
 
         llc_req_val_o = 1'b0;
         llc_req_is_write_o = 1'b1;
@@ -109,24 +106,39 @@ module cache_coherency_bus_responder #(
                 bus2cache_req.req_rdy = idx_avail_i;
                 if (bus2cache_req.req_val && bus2cache_req.req_rdy) begin
                     req_addr_d = bus2cache_req.req_addr;
-                    lookup_hit_d = lookup_hit_i;
-                    lookup_data_d = lookup_data_i;
+                    bus_op_d = bus2cache_req.bus_op;
+                    state_d = LOOKUP_SUBMIT;
+                end
+            end
 
-                    if (!lookup_hit_i) begin
+            LOOKUP_SUBMIT: begin
+                remote_snoop.req_val = 1'b1;
+                if (remote_snoop.req_rdy) begin
+                    state_d = LOOKUP_WAIT;
+                end
+            end
+
+            LOOKUP_WAIT: begin
+                remote_snoop.rsp_rdy = 1'b1;
+                if (remote_snoop.rsp_val) begin
+                    lookup_hit_d = remote_snoop.rsp_hit;
+                    lookup_data_d = remote_snoop.rsp_data;
+
+                    if (!remote_snoop.rsp_hit) begin
                         state_d = RESP;
-                    end else if (bus2cache_req.bus_op == BusRd) begin
+                    end else if (bus_op_q == BusRd) begin
                         remote_coh_state_d = COH_Shared;
-                        if (lookup_coh_i == COH_Modified) begin
+                        if (remote_snoop.rsp_coh == COH_Modified) begin
                             state_d = LLC_SUBMIT;
-                        end else if (lookup_coh_i == COH_Exclusive) begin
+                        end else if (remote_snoop.rsp_coh == COH_Exclusive) begin
                             state_d = REMOTE_COMMIT;
                         end else begin
                             state_d = RESP;
                         end
-                    end else if (bus2cache_req.bus_op == BusRdX) begin
+                    end else if (bus_op_q == BusRdX) begin
                         remote_coh_state_d = COH_Invalid;
                         state_d = LLC_SUBMIT;
-                    end else if (bus2cache_req.bus_op == BusUpgr) begin
+                    end else if (bus_op_q == BusUpgr) begin
                         remote_coh_state_d = COH_Invalid;
                         state_d = REMOTE_COMMIT;
                     end else begin
@@ -173,12 +185,14 @@ module cache_coherency_bus_responder #(
         if (!rst_ni) begin
             state_q <= IDLE;
             req_addr_q <= '0;
+            bus_op_q <= BusNOP;
             lookup_hit_q <= 1'b0;
             lookup_data_q <= '0;
             remote_coh_state_q <= COH_Invalid;
         end else begin
             state_q <= state_d;
             req_addr_q <= req_addr_d;
+            bus_op_q <= bus_op_d;
             lookup_hit_q <= lookup_hit_d;
             lookup_data_q <= lookup_data_d;
             remote_coh_state_q <= remote_coh_state_d;

@@ -43,11 +43,9 @@ class GlobalCoherencyTB:
         self.dut.cache_req_addr.value = address
         self.dut.cache_req_val.value = 1
         while True:
-            await settle()
-            if int(self.dut.cache_req_rdy.value):
-                await RisingEdge(self.dut.clk_i)
-                break
             await RisingEdge(self.dut.clk_i)
+            if int(self.dut.cache_req_rdy.value):
+                break
         self.dut.cache_req_val.value = 0
         await settle()
 
@@ -70,11 +68,13 @@ class GlobalCoherencyTB:
         self.dut.pseudo_replier_resp_cfg.value = self._pseudo_resp_cfg
 
     async def wait_cache_response(self):
+        self.dut.cache_rsp_rdy.value = 1
         while True:
-            await settle()
-            if int(self.dut.cache_rsp_val.value):
-                return bool(int(self.dut.cache_rsp_shared.value))
             await RisingEdge(self.dut.clk_i)
+            if int(self.dut.cache_rsp_val.value):
+                shared = bool(int(self.dut.cache_rsp_shared.value))
+                self.dut.cache_rsp_rdy.value = 0
+                return shared
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
@@ -146,5 +146,7 @@ async def returns_not_shared_when_no_snooper_has_a_copy(dut):
     await tb.submit(source=source, bus_op=BUS_RDX, address=0xABC0)
     response_shared = await tb.wait_cache_response()
 
-    assert int(dut.cache_rsp_val.value) == 1
     assert response_shared is False
+    await settle()
+    assert int(dut.cache_rsp_val.value) == 0
+    assert int(dut.cache_req_rdy.value) == 1

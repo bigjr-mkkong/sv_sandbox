@@ -32,6 +32,7 @@ RTL_FILELIST := build/rtl/rtl.flist
 RTL_STAMP := build/rtl/.prepared
 RTL_TREE_INPUTS := $(shell find rtl -type f)
 UNIT_TEST_MANIFEST := build/.unit-test.json
+BSG_MISC_DIR := $(PROJECT_ROOT)/third_party/basejump_stl/bsg_misc
 
 DV_SOURCES := dv/dv_pkg.sv dv/top_module_runner.sv dv/top_module_tb.sv
 SIM_DIR := build/sim
@@ -106,7 +107,7 @@ $(RTL_RENDERED) $(RTL_FILELIST): $(RTL_STAMP)
 prepare: $(RTL_STAMP) $(UNIT_TEST_MANIFEST)
 
 lint: $(RTL_STAMP) $(RTL_SOURCES) lint/verilator.vlt
-	verilator lint/verilator.vlt --lint-only --Wall --top-module $(TOP) $(RTL_SOURCES)
+	verilator lint/verilator.vlt -I$(BSG_MISC_DIR) --lint-only --Wall --top-module $(TOP) $(RTL_SOURCES)
 
 $(SIM_BINARY): $(RTL_STAMP) $(RTL_SOURCES) $(DV_SOURCES) dv/dv.flist lint/verilator.vlt
 	@mkdir -p $(SIM_DIR)
@@ -118,7 +119,31 @@ compile: $(SIM_BINARY)
 test: $(SIM_BINARY)
 	$(SIM_BINARY) +verilator+rand+reset+2
 
+# Stop before launching a simulator against synthesis-only SRAM blackboxes.
+define check_simulation_config
+@$(PYTHON) -c 'import json, sys; \
+    synth = bool(json.load(open("rtl/config.json")).get("RENDER_OPTION", {}).get("SYNTH", False)); \
+    synth and print("\n".join([ \
+        "", \
+        "################################################################", \
+        "#                                                              #", \
+        "#   SSS  Y   Y  N   N  TTTTT  H   H      OOO   N   N             #", \
+        "#  S      Y Y   NN  N    T    H   H     O   O  NN  N             #", \
+        "#   SSS    Y    N N N    T    HHHHH     O   O  N N N             #", \
+        "#      S   Y    N  NN    T    H   H     O   O  N  NN             #", \
+        "#   SSS    Y    N   N    T    H   H      OOO   N   N             #", \
+        "#                                                              #", \
+        "#  WARNING: RENDER_OPTION.SYNTH is enabled.                      #", \
+        "#  Set SYNTH to false in rtl/config.json, then rerun this target.#", \
+        "#                                                              #", \
+        "################################################################", \
+        "" \
+    ]), file=sys.stderr); \
+    sys.exit(1 if synth else 0)'
+endef
+
 test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmod_tb0.py
+	$(check_simulation_config)
 	$(MAKE) -f Makefile.cocotb \
 		SIM_BUILD=build/cocotb-rtl \
 		COCOTB_RESULTS_FILE=$(abspath build/cocotb-rtl/results.xml) \
@@ -128,6 +153,7 @@ test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmo
 		COCOTB_TEST_MODULES=dv.cocotb_benches.topmod_tb0
 
 unit-test: $(UNIT_TEST_MANIFEST) misc/unit-test.py Makefile.cocotb
+	$(check_simulation_config)
 	$(PYTHON) misc/unit-test.py --manifest $(UNIT_TEST_MANIFEST) --rtl-dir build/rtl
 
 $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
@@ -198,7 +224,7 @@ test-icebreaker-gls: $(ICE_SIM_NETLIST) Makefile.cocotb \
 		COCOTB_TEST_MODULES=dv.ICE_cocotb_benches.ice_topmod_tb0
 
 check-vivado-sources: $(RTL_STAMP) $(RTL_SOURCES) synth/vivado_basys3/basys3.sv
-	yosys -m slang -Q -p 'read_slang --lint-only --ignore-unknown-modules --top basys3 -f $(RTL_FILELIST) synth/vivado_basys3/basys3.sv'
+	yosys -m slang -Q -p 'read_slang -I$(BSG_MISC_DIR) --lint-only --ignore-unknown-modules --top basys3 -f $(RTL_FILELIST) synth/vivado_basys3/basys3.sv'
 
 $(VIVADO_BITSTREAM): $(RTL_STAMP) $(RTL_SOURCES) synth/vivado_basys3/basys3.sv \
 		synth/vivado_basys3/Basys3_Master.xdc synth/vivado_basys3/constraints.xdc \

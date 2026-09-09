@@ -9,4 +9,5 @@ build
 signal.md
 venv/
 .rtl_flist.tmp
+results.xml
 /openroad/output/

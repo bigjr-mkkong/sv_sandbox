@@ -23,6 +23,7 @@ export VERILOG_FILES = \
     $(PROJECT_HOME)/build/rtl/MESI_protocol.sv \
     $(PROJECT_HOME)/build/rtl/cache_coherency.sv \
     $(PROJECT_HOME)/build/rtl/coh_bus_arbiter.sv \
+    $(PROJECT_HOME)/build/rtl/cache_bank.sv \
     $(PROJECT_HOME)/build/rtl/cache_committer.sv \
     $(PROJECT_HOME)/build/rtl/cache_coherency_bus_responder.sv \
     $(PROJECT_HOME)/build/rtl/LLC_committer.sv \
@@ -31,6 +32,12 @@ export VERILOG_FILES = \
     $(PROJECT_HOME)/build/rtl/top_module.sv
 
 export SDC_FILE = $(PROJECT_HOME)/openroad/top_module.sdc
+
+export ADDITIONAL_LEFS = \
+    $(PLATFORM_DIR)/lef/fakeram45_128x64.lef
+
+export ADDITIONAL_LIBS = \
+    $(PLATFORM_DIR)/lib/fakeram45_128x64.lib
 
 # Initial physical-design parameters. These only provide a starting point for
 # the first timing experiment and are not intended as a tuned floorplan.

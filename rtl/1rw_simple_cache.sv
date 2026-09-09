@@ -22,6 +22,7 @@ import config_pkg::*;
     rtl_dependencies = [
         "MESI_protocol.sv",
         "cache_coherency.sv",
+        "cache_bank.sv",
         "cache_committer.sv",
         "cache_coherency_bus_responder.sv",
         "LLC_committer.sv"
@@ -59,8 +60,10 @@ module simple_cache_1rw #(
     localparam int unsigned INDEX_BITS = $clog2(ROW_CNT);
     localparam int unsigned TAG_WIDTH = ADDR_WIDTH - OFFSET_WIDTH - INDEX_BITS;
 
-    typedef enum logic [2:0] {
+    typedef enum logic [3:0] {
         IDLE,
+        LOOKUP_SUBMIT,
+        LOOKUP_WAIT,
         RESP,
         COH_SUBMIT,
         COH_WAIT,
@@ -94,7 +97,7 @@ module simple_cache_1rw #(
     logic [ADDR_WIDTH-1:0] victim_line_addr;
 
     logic target_is_hit;
-    logic victim_modified;
+    // logic victim_modified;
     coh_state target_coh;
 
     logic coh_req_val_i, coh_req_rdy_o;
@@ -133,45 +136,59 @@ module simple_cache_1rw #(
         .DATA_PER_LINE(DATA_PER_LINE)
     ) main_commit();
 
-    logic main_lookup_result_hit;
-    coh_state main_lookup_result_coh;
-    logic [TAG_WIDTH-1:0] main_lookup_result_tag;
+    cache_snoop_if #(
+        .INDEX_BITS(INDEX_BITS),
+        .TAG_WIDTH(TAG_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DATA_PER_LINE(DATA_PER_LINE)
+    ) remote_snoop();
+
+    cache_snoop_if #(
+        .INDEX_BITS(INDEX_BITS),
+        .TAG_WIDTH(TAG_WIDTH),
+        .DATA_WIDTH(DATA_WIDTH),
+        .DATA_PER_LINE(DATA_PER_LINE)
+    ) main_snoop();
+
+    logic main_lookup_result_hit_d, main_lookup_result_hit_q;
+    logic [TAG_WIDTH-1:0]
+        main_lookup_result_tag_d, main_lookup_result_tag_q;
     logic [DATA_PER_LINE-1:0][DATA_WIDTH-1:0]
-        main_lookup_result_data;
+        main_lookup_result_data_d, main_lookup_result_data_q;
+    coh_state main_live_coh;
+    logic cache_reset_fin;
 
     logic responder_idx_avail;
     logic snoop_idx_in_use;
     logic [INDEX_BITS-1:0] snoop_active_idx;
-    logic [INDEX_BITS-1:0] snoop_lookup_idx;
-    logic [TAG_WIDTH-1:0] snoop_lookup_tag;
-    logic snoop_lookup_result_hit;
-    coh_state snoop_lookup_result_coh;
-    logic [DATA_PER_LINE-1:0][DATA_WIDTH-1:0]
-        snoop_lookup_result_data;
+    logic [INDEX_BITS-1:0] incoming_snoop_idx;
     logic main_idx_in_use;
     logic upstream_idx_avail;
     logic snoop_req_handshake;
-    logic snoop_changes_target_line;
+    logic same_idx_snoop_accepting;
+    logic same_idx_snoop_active;
+    logic remote_commit_fire;
+    logic remote_commit_changes_target_idx;
+    logic local_commit_unblocked;
 
     //I gave it 4bits to keep CACHE_ID, shoule be enough
     assign cache2bus_req.req_src = CACHE_ID;
-    assign local_req_legal = !coh_serialization_switch_q;
+    assign incoming_snoop_idx = INDEX_BITS'(
+        bus2cache_req.req_addr >> OFFSET_WIDTH
+    );
     assign snoop_req_handshake = bus2cache_req.req_val
         && bus2cache_req.req_rdy;
-
-
-    assign snoop_changes_target_line = snoop_req_handshake
-        && snoop_lookup_result_hit
-        && bus2cache_req.req_addr[ADDR_WIDTH-1:OFFSET_WIDTH]
-            == target_line_addr[ADDR_WIDTH-1:OFFSET_WIDTH]
-        && (
-            bus2cache_req.bus_op inside {BusRdX, BusUpgr}
-            || (bus2cache_req.bus_op == BusRd
-                && snoop_lookup_result_coh inside {
-                    COH_Exclusive,
-                    COH_Modified
-                })
-        );
+    assign same_idx_snoop_accepting = snoop_req_handshake
+        && incoming_snoop_idx == target_addr_idx;
+    assign same_idx_snoop_active = snoop_idx_in_use
+        && snoop_active_idx == target_addr_idx;
+    assign remote_commit_fire = remote_commit.val && remote_commit.rdy;
+    assign remote_commit_changes_target_idx = remote_commit_fire
+        && remote_commit.index == target_addr_idx;
+    assign local_req_legal = !coh_serialization_switch_q
+        && !remote_commit_changes_target_idx;
+    assign local_commit_unblocked = !same_idx_snoop_accepting
+        && !same_idx_snoop_active;
 
     /*
      * Resolve the MESI transition for the active upstream request. Requests
@@ -222,11 +239,7 @@ module simple_cache_1rw #(
         .idx_avail_i(responder_idx_avail),
         .idx_in_use_o(snoop_idx_in_use),
         .active_idx_o(snoop_active_idx),
-        .lookup_idx_o(snoop_lookup_idx),
-        .lookup_tag_o(snoop_lookup_tag),
-        .lookup_hit_i(snoop_lookup_result_hit),
-        .lookup_coh_i(snoop_lookup_result_coh),
-        .lookup_data_i(snoop_lookup_result_data),
+        .remote_snoop(remote_snoop),
         .llc_req_val_o(coh_llc_req_val),
         .llc_req_rdy_i(coh_llc_req_rdy),
         .llc_req_is_write_o(coh_llc_req_is_write),
@@ -238,9 +251,9 @@ module simple_cache_1rw #(
     );
 
     /*
-     * Own the cache storage and arbitrate its two commit sources. The remote
-     * and main paths may update different rows together; a same-row conflict
-     * backpressures the main path so the remote MESI change remains visible.
+     * Own the cache storage and serialize all tag/data accesses. A write-ready
+     * handshake is the physical update edge. Synchronous reads are held until
+     * their selected consumer accepts the response.
      */
     cache_committer #(
         .ROW_CNT(ROW_CNT),
@@ -251,19 +264,13 @@ module simple_cache_1rw #(
     ) cache_committer_inst (
         .clk_i(clk_i),
         .rst_ni(rst_ni),
-        .main_lookup_idx_i(target_addr_idx),
-        .main_lookup_tag_i(target_addr_tag),
-        .main_lookup_result_hit_o(main_lookup_result_hit),
-        .main_lookup_result_coh_o(main_lookup_result_coh),
-        .main_lookup_result_tag_o(main_lookup_result_tag),
-        .main_lookup_result_data_o(main_lookup_result_data),
-        .snoop_lookup_idx_i(snoop_lookup_idx),
-        .snoop_lookup_tag_i(snoop_lookup_tag),
-        .snoop_lookup_result_hit_o(snoop_lookup_result_hit),
-        .snoop_lookup_result_coh_o(snoop_lookup_result_coh),
-        .snoop_lookup_result_data_o(snoop_lookup_result_data),
+        .reset_fin_o(cache_reset_fin),
+        .coh_probe_idx_i(target_addr_idx),
+        .coh_probe_o(main_live_coh),
         .remote_commit(remote_commit),
-        .main_commit(main_commit)
+        .main_commit(main_commit),
+        .remote_snoop(remote_snoop),
+        .main_snoop(main_snoop)
     );
 
     /*
@@ -316,31 +323,32 @@ module simple_cache_1rw #(
 
     always_comb begin
         victim_line_addr = {
-            main_lookup_result_tag,
+            main_lookup_result_tag_q,
             target_addr_idx,
             {OFFSET_WIDTH{1'b0}}
         };
 
-        target_is_hit = main_lookup_result_hit;
-        victim_modified = !target_is_hit
-            && main_lookup_result_coh == COH_Modified;
-        target_coh = target_is_hit
-            ? main_lookup_result_coh : COH_Invalid;
+        target_is_hit = main_lookup_result_hit_q
+            && main_live_coh != COH_Invalid;
+        // LOOKUP_WAIT decides eviction before the current response is latched.
+        // victim_modified = !main_snoop.rsp_hit
+        //     && main_snoop.rsp_coh == COH_Modified;
+        target_coh = target_is_hit ? main_live_coh : COH_Invalid;
 
         main_idx_in_use = state_q inside {
             EVICT_SUBMIT,
             EVICT_WAIT,
             MISS_SUBMIT,
             MISS_WAIT
-        } || (state_q == COH_WAIT && coh_rsp_val_o);
-        responder_idx_avail = !main_idx_in_use
-            || snoop_lookup_idx != target_addr_idx;
+        };
+        responder_idx_avail = cache_reset_fin && (!main_idx_in_use
+            || incoming_snoop_idx != target_addr_idx);
         upstream_idx_avail = (
             !snoop_idx_in_use || target_addr_idx != snoop_active_idx
         ) && !(
             bus2cache_req.req_val
             && responder_idx_avail
-            && target_addr_idx == snoop_lookup_idx
+            && target_addr_idx == incoming_snoop_idx
         );
     end
 
@@ -351,8 +359,16 @@ module simple_cache_1rw #(
         req_data_d = req_data_q;
         req_is_write_d = req_is_write_q;
         result_coh_d = result_coh_q;
+        main_lookup_result_hit_d = main_lookup_result_hit_q;
+        main_lookup_result_tag_d = main_lookup_result_tag_q;
+        main_lookup_result_data_d = main_lookup_result_data_q;
         coh_req_val_i = 1'b0;
         coh_rsp_rdy_i = 1'b0;
+
+        main_snoop.req_val = 1'b0;
+        main_snoop.idx = target_addr_idx;
+        main_snoop.tag = target_addr_tag;
+        main_snoop.rsp_rdy = 1'b0;
 
         upstream.req_rdy = 1'b0;
         upstream.rsp_val = 1'b0;
@@ -361,7 +377,7 @@ module simple_cache_1rw #(
         main_llc_req_val = 1'b0;
         main_llc_req_is_write = 1'b0;
         main_llc_req_addr = target_line_addr;
-        main_llc_req_data = main_lookup_result_data;
+        main_llc_req_data = main_lookup_result_data_q;
         main_llc_rsp_rdy = 1'b0;
 
         main_commit.val = 1'b0;
@@ -374,13 +390,31 @@ module simple_cache_1rw #(
 
         unique case (state_q)
             IDLE: begin
-                upstream.req_rdy = upstream_idx_avail;
+                upstream.req_rdy = cache_reset_fin && upstream_idx_avail;
                 if (upstream.req_val && upstream.req_rdy) begin
                     req_addr_d = ADDR_WIDTH'(upstream.req_addr);
                     req_data_d = DATA_WIDTH'(upstream.req_data);
                     req_is_write_d = upstream.req_rw_flag;
 
-                    if (victim_modified) begin
+                    main_snoop.req_val = upstream_idx_avail;
+                    state_d = (main_snoop.req_val && main_snoop.req_rdy)?LOOKUP_WAIT:LOOKUP_SUBMIT;
+                end
+            end
+
+            LOOKUP_SUBMIT: begin
+                main_snoop.req_val = upstream_idx_avail;
+                if (main_snoop.req_val && main_snoop.req_rdy) begin
+                    state_d = LOOKUP_WAIT;
+                end
+            end
+
+            LOOKUP_WAIT: begin
+                main_snoop.rsp_rdy = 1'b1;
+                if (main_snoop.rsp_val) begin
+                    main_lookup_result_hit_d = main_snoop.rsp_hit;
+                    main_lookup_result_tag_d = main_snoop.rsp_tag;
+                    main_lookup_result_data_d = main_snoop.rsp_data;
+                    if (!main_snoop.rsp_hit && main_snoop.rsp_coh == COH_Modified) begin //if victim has been modified
                         state_d = EVICT_SUBMIT;
                     end else begin
                         state_d = COH_SUBMIT;
@@ -399,7 +433,7 @@ module simple_cache_1rw #(
                 main_llc_req_val = 1'b1;
                 main_llc_req_is_write = 1'b1;
                 main_llc_req_addr = victim_line_addr;
-                main_llc_req_data = main_lookup_result_data;
+                main_llc_req_data = main_lookup_result_data_q;
                 if (main_llc_req_rdy) begin
                     state_d = EVICT_WAIT;
                 end
@@ -417,17 +451,21 @@ module simple_cache_1rw #(
                 end
             end
 
-            COH_SUBMIT: begin
-                // A retry cannot start until the conflicting snoop releases
-                // the direct-mapped index and its coherence update is visible.
-                coh_req_val_i = upstream_idx_avail;
-                if (coh_req_val_i && coh_req_rdy_o) begin
-                    state_d = COH_WAIT;
+            COH_SUBMIT, COH_WAIT: begin
+                if (state_q == COH_SUBMIT) begin
+                    // A retry waits for the conflicting snoop to release
+                    // the index and make its coherence update visible.
+                    coh_req_val_i = upstream_idx_avail;
+                    if (coh_req_val_i && coh_req_rdy_o) begin
+                        state_d = COH_WAIT;
+                    end
                 end
-            end
 
-            COH_WAIT: begin
-                if (coh_rsp_val_o) begin
+                // BusNOP can return a completed decision on the request
+                // edge. Both paths use the same snoop and commit guards.
+                if ((state_q == COH_WAIT
+                        || (coh_req_val_i && coh_req_rdy_o))
+                        && coh_rsp_val_o && local_commit_unblocked) begin
                     if (!local_req_legal) begin
                         /*
                          * The cache COH serialization switch discards this
@@ -446,7 +484,7 @@ module simple_cache_1rw #(
                         main_commit.index = target_addr_idx;
                         main_commit.coh = local_result_coh;
                         main_commit.data_we = 1'b1;
-                        main_commit.data = main_lookup_result_data;
+                        main_commit.data = main_lookup_result_data_q;
                         main_commit.data[target_word_idx] = req_data_q;
                         coh_rsp_rdy_i = main_commit.rdy;
                         if (main_commit.rdy) begin
@@ -460,7 +498,7 @@ module simple_cache_1rw #(
                         main_commit.coh = local_result_coh;
                         coh_rsp_rdy_i = main_commit.rdy;
                         if (main_commit.rdy) begin
-                            rsp_data_d = main_lookup_result_data[
+                            rsp_data_d = main_lookup_result_data_q[
                                 target_word_idx
                             ];
                             state_d = RESP;
@@ -468,7 +506,7 @@ module simple_cache_1rw #(
                     end else begin
                         result_coh_d = local_result_coh;
                         coh_rsp_rdy_i = 1'b1;
-                        rsp_data_d = main_lookup_result_data[
+                        rsp_data_d = main_lookup_result_data_q[
                             target_word_idx
                         ];
                         state_d = RESP;
@@ -523,6 +561,9 @@ module simple_cache_1rw #(
             req_data_q <= '0;
             req_is_write_q <= 1'b0;
             result_coh_q <= COH_Invalid;
+            main_lookup_result_hit_q <= 1'b0;
+            main_lookup_result_tag_q <= '0;
+            main_lookup_result_data_q <= '0;
             coh_serialization_switch_q <= 1'b0;
 
         end else begin
@@ -532,6 +573,9 @@ module simple_cache_1rw #(
             req_data_q <= req_data_d;
             req_is_write_q <= req_is_write_d;
             result_coh_q <= result_coh_d;
+            main_lookup_result_hit_q <= main_lookup_result_hit_d;
+            main_lookup_result_tag_q <= main_lookup_result_tag_d;
+            main_lookup_result_data_q <= main_lookup_result_data_d;
             /*
              * Latch the cache COH serialization switch only at a completed
              * snoop handshake. Keeping this update sequential avoids a ready
@@ -540,7 +584,7 @@ module simple_cache_1rw #(
             if (state_q == IDLE) begin
                 coh_serialization_switch_q <= 1'b0;
             end else if (state_q == COH_WAIT
-                         && snoop_changes_target_line) begin
+                         && remote_commit_changes_target_idx) begin
                 coh_serialization_switch_q <= 1'b1;
             end else if (state_q == COH_WAIT
                          && coh_rsp_val_o

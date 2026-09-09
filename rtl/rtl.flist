@@ -12,12 +12,18 @@ third_party/taxi/src/axi/rtl/taxi_axil_interconnect_rd.sv
 third_party/taxi/src/axi/rtl/taxi_axil_interconnect_wr.sv
 third_party/taxi/src/axi/rtl/taxi_axil_interconnect.sv
 
+// BaseJump primitives used by the simulation cache-bank implementation.
+third_party/basejump_stl/bsg_misc/bsg_defines.sv
+third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync_synth.sv
+third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync.sv
+
 // Project RTL. Files below rtl/ are rendered into build/rtl/.
 rtl/config_pkg.sv
 rtl/1rw_dumb_dram.sv
 rtl/MESI_protocol.sv
 rtl/cache_coherency.sv
 rtl/coh_bus_arbiter.sv
+rtl/cache_bank.sv
 rtl/cache_committer.sv
 rtl/cache_coherency_bus_responder.sv
 rtl/LLC_committer.sv

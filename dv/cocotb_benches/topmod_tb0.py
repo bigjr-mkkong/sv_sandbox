@@ -3,7 +3,7 @@ from dataclasses import dataclass
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.triggers import FallingEdge, RisingEdge
 
 from dv.cocotb_benches.upstream_if import UpstreamMaster
 
@@ -73,13 +73,18 @@ class CacheDramTB:
         self.pending_requests = [None] * len(self.cpus)
 
     async def reset(self):
+        """Return only after every L1 has completed its coherence reset sweep."""
         # self.dut.rxd_i.value = 1
         self.dut.rst_ni.value = 0
         for _ in range(10):
             await RisingEdge(self.dut.clk_i)
         self.dut.rst_ni.value = 1
-        for _ in range(2):
-            await RisingEdge(self.dut.clk_i)
+        for _ in range(CACHE_ROW_COUNT + 1):
+            await FallingEdge(self.dut.clk_i)
+            if all(int(cache.cache_reset_fin.value) for cache in self.cache_instances):
+                await RisingEdge(self.dut.clk_i)
+                return
+        raise AssertionError("L1 coherence initialization did not finish")
 
     async def read_word(self, cache_index, address):
         assert address % DATA_BYTES == 0
@@ -164,12 +169,10 @@ class CacheDramTB:
         return await self.wait_rsp(cache_index, request)
 
     def cache_line(self, cache_index, address):
-        """Decode one internal packed cache entry without changing DUT state."""
+        """Decode the simulation-only view of the requested cache row."""
         row_index = (address >> CACHE_OFFSET_WIDTH) % CACHE_ROW_COUNT
-        entry = (
-            self.cache_instances[cache_index]
-            .cache_committer_inst.cache[row_index]
-        )
+        committer = self.cache_instances[cache_index].cache_committer_inst
+        entry = committer.pseudo_cache[row_index]
         raw_entry = int(entry.value)
         line_data_mask = (1 << (LINE_BYTES * 8)) - 1
         tag_mask = (1 << CACHE_TAG_WIDTH) - 1

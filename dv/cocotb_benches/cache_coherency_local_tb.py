@@ -117,11 +117,9 @@ class CacheCoherencyTB:
         self.dut.req_val_i.value = 1
 
         while True:
-            await settle()
-            if int(self.dut.req_rdy_o.value):
-                await RisingEdge(self.dut.clk_i)
-                break
             await RisingEdge(self.dut.clk_i)
+            if int(self.dut.req_rdy_o.value):
+                break
 
         self.dut.req_val_i.value = 0
         await settle()
@@ -133,22 +131,20 @@ class CacheCoherencyTB:
         assert self._captured_rsp is None
         self.dut.rsp_rdy_i.value = 1
         while True:
-            await settle()
+            await RisingEdge(self.dut.clk_i)
             if int(self.dut.rsp_val_o.value):
                 self._captured_rsp = (
                     int(self.dut.new_coh_state_o.value),
                     int(self.dut.bus_op_out_q.value),
                     bool(self.dut.local_coh_commit_o.value),
                 )
-                await RisingEdge(self.dut.clk_i)
+                self.dut.rsp_rdy_i.value = 0
                 return
-            await RisingEdge(self.dut.clk_i)
 
     def read_rsp(self):
         assert self._captured_rsp is not None
         response = self._captured_rsp
         self._captured_rsp = None
-        self.dut.rsp_rdy_i.value = 0
         return response
 
 
@@ -179,6 +175,62 @@ async def prepare_state(tb, address, state):
     else:
         raise AssertionError(f"unsupported MESI state: {state}")
     assert tb.mesi_expected.state(address) == state
+
+
+@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
+async def busnop_immediate_response_and_registered_fallback(dut):
+    """No-bus decisions complete on acceptance or hold under backpressure."""
+    tb = CacheCoherencyTB(dut)
+    await tb.reset()
+    address = 0x8000
+    for ready in (True, False):
+        for state, is_write in (
+            (COH_SHARED, False), (COH_EXCLUSIVE, False),
+            (COH_MODIFIED, False), (COH_EXCLUSIVE, True),
+            (COH_MODIFIED, True),
+        ):
+            address += 64
+            await prepare_state(tb, address, state)
+            request = LocalRequest(is_hit=True, is_write=is_write, address=address)
+            tb.mesi_expected.submit_req(request, shared=False)
+            await FallingEdge(dut.clk_i)
+            dut.req_addr_i.value = address
+            dut.req_is_hit_i.value = 1
+            dut.req_coh_i.value = state
+            dut.req_is_write_i.value = int(is_write)
+            dut.req_val_i.value = 1
+            dut.rsp_rdy_i.value = int(ready)
+            await settle()
+            assert int(dut.req_rdy_o.value) == 1
+            assert int(dut.rsp_val_o.value) == 1
+            assert int(dut.coh_bus_req_val_o.value) == 0
+            response = (
+                int(dut.new_coh_state_o.value), BUS_NOP,
+                bool(dut.local_coh_commit_o.value),
+            )
+            await RisingEdge(dut.clk_i)
+            dut.req_val_i.value = 0
+            dut.req_coh_i.value = COH_INVALID
+            dut.req_is_write_i.value = 0
+            await settle()
+
+            if not ready:
+                for _ in range(3):
+                    assert int(dut.req_rdy_o.value) == 0
+                    assert int(dut.rsp_val_o.value) == 1
+                    assert int(dut.new_coh_state_o.value) == response[0]
+                    assert bool(dut.local_coh_commit_o.value) == response[2]
+                    assert int(dut.coh_bus_req_val_o.value) == 0
+                    await RisingEdge(dut.clk_i)
+                    await settle()
+                dut.rsp_rdy_i.value = 1
+                await RisingEdge(dut.clk_i)
+                await settle()
+
+            tb.mesi_expected.commit_rsp(response)
+            dut.rsp_rdy_i.value = 0
+            assert int(dut.req_rdy_o.value) == 1
+            assert int(dut.rsp_val_o.value) == 0
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")

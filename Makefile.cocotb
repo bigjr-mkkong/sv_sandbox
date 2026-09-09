@@ -8,6 +8,7 @@ override CUSTOM_COMPILE_DEPS += $(PROJECT_CPP_SOURCES)
 endif
 
 COMPILE_ARGS += -Wno-fatal
+COMPILE_ARGS += -I$(dir $(abspath $(firstword $(MAKEFILE_LIST))))third_party/basejump_stl/bsg_misc
 COMPILE_ARGS += $(USER_COMPILE_ARGS)
 EXTRA_ARGS += --trace --trace-structs
 SIM_ARGS += $(USER_SIM_ARGS)

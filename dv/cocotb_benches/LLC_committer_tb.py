@@ -103,18 +103,17 @@ class LLCCommitter:
         address,
         data,
     ):
+        # Payload must already be valid when ready rises, even after a stall.
+        req_is_write.value = int(is_write)
+        req_addr.value = address
+        req_data.value = data
         req_val.value = 1
 
         while True:
-            await Timer(1, unit="ns")
+            await RisingEdge(self.dut.clk_i)
             if req_rdy.value:
-                req_is_write.value = int(is_write)
-                req_addr.value = address
-                req_data.value = data
-                await RisingEdge(self.dut.clk_i)
                 req_val.value = 0
                 return
-            await RisingEdge(self.dut.clk_i)
 
     async def _wait_response(
         self,
@@ -128,15 +127,12 @@ class LLCCommitter:
         rsp_rdy.value = 1
 
         while True:
-            await Timer(1, unit="ns")
+            await RisingEdge(self.dut.clk_i)
+            assert not other_rsp_val.value
             if rsp_val.value:
                 result = int(rsp_data.value)
-                assert not other_rsp_val.value
-                await RisingEdge(self.dut.clk_i)
                 rsp_rdy.value = 0
                 return result, wait_cycles
-            assert not other_rsp_val.value
-            await RisingEdge(self.dut.clk_i)
             wait_cycles += 1
 
     async def _wait_value(self, signal, expected, limit):

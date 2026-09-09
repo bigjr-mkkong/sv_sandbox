@@ -6,12 +6,12 @@ set wrapper [lindex $argv 2]
 set output_netlist [lindex $argv 3]
 
 if {$mode eq "simulation"} {
-    read_slang -DICEBREAKER_SIMULATION --top icebreaker -f $rtl_filelist $wrapper
+    read_slang -Ithird_party/basejump_stl/bsg_misc -DICEBREAKER_SIMULATION --top icebreaker -f $rtl_filelist $wrapper
 } elseif {$mode eq "hardware"} {
     set pll_source [lindex $argv 4]
     set ice40_cells [lindex $argv 5]
 
-    read_slang -Wno-unconnected-port -v $ice40_cells \
+    read_slang -Ithird_party/basejump_stl/bsg_misc -Wno-unconnected-port -v $ice40_cells \
         --top icebreaker -f $rtl_filelist $pll_source $wrapper
 } else {
     error "unknown iCEBreaker synthesis mode: $mode"
