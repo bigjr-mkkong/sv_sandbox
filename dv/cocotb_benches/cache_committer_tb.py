@@ -326,6 +326,7 @@ async def global_blocking_priority_and_held_response(dut):
         )
         await RisingEdge(dut.clk_i)
         await FallingEdge(dut.clk_i)
+        assert int(dut.remote_snoop_rsp_val_o.value)
         assert read_response(dut, "remote") == held
 
     dut.remote_snoop_rsp_rdy_i.value = 1

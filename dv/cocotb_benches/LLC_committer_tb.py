@@ -1,6 +1,6 @@
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge, Timer
+from cocotb.triggers import FallingEdge, RisingEdge, Timer
 
 
 CLOCK_PERIOD_NS = 10
@@ -181,6 +181,23 @@ async def coherence_priority_and_response_routing(dut):
     assert int(dut.dram_last_write_addr_o.value) == coh_addr
     assert int(dut.dram_last_write_data_o.value) == coh_line
     assert dut.cache_req_val_i.value
+
+    # Wait for an actual response, then hold it while the other producer waits.
+    for _ in range(100):
+        await FallingEdge(dut.clk_i)
+        if dut.coh_rsp_val_o.value:
+            break
+    else:
+        raise AssertionError("coherence write did not produce a response")
+    for _ in range(4):
+        await RisingEdge(dut.clk_i)
+        assert dut.coh_rsp_val_o.value
+        assert not dut.coh_rsp_rdy_i.value
+        assert int(dut.coh_rsp_data_o.value) == 0
+        assert dut.cache_req_val_i.value
+        assert not dut.cache_req_rdy_o.value
+        assert int(dut.cache_req_addr_i.value) == cache_addr
+        assert int(dut.dram_read_count_o.value) == 0
 
     assert await tb.wait_coh_request() == 0
 

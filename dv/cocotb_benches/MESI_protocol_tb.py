@@ -26,6 +26,7 @@ MESI_TABLE = {
 
 @cocotb.test()
 async def all_mesi_table_entries_match(dut):
+    # Loop through all MESI result combination
     """Check every state/CPU-operation row and both shared outcomes."""
     dut.begin_judge.value = 0
     dut.req_is_write_i.value = 0

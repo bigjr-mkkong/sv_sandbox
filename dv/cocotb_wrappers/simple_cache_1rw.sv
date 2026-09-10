@@ -181,7 +181,8 @@ module simple_cache_1rw_unit_test;
                         ? SNOOP_WAIT : SNOOP_READY_DELAY;
                 end
 
-                SNOOP_READY_DELAY: begin
+                // Count actual response backpressure, not lookup/flush latency.
+                SNOOP_READY_DELAY: if (snoop_bus_req.rsp_val) begin
                     snoop_delay_q <= snoop_delay_q - 1'b1;
                     if (snoop_delay_q == 1) begin
                         snoop_state_q <= SNOOP_WAIT;

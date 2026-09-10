@@ -79,6 +79,7 @@ class GlobalCoherencyTB:
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def excludes_requester_and_collects_independent_replies(dut):
+    # This bench test if snooper will ignore the requester as target of BusOP
     tb = GlobalCoherencyTB(dut)
     await tb.reset()
 
@@ -133,20 +134,25 @@ async def excludes_requester_and_collects_independent_replies(dut):
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
-async def returns_not_shared_when_no_snooper_has_a_copy(dut):
+async def shared_response_matches_every_responder_combination(dut):
+    """OR all non-requester replies for every source, response mask and BusOP."""
     tb = GlobalCoherencyTB(dut)
     await tb.reset()
 
-    source = 0
-    targets = (1, 2, 3)
-    for port, delay in zip(targets, (2, 0, 4)):
-        tb.pseudo_replier_delay(port, delay)
-        tb.pseudo_replier_resp(port, shared=False)
-
-    await tb.submit(source=source, bus_op=BUS_RDX, address=0xABC0)
-    response_shared = await tb.wait_cache_response()
-
-    assert response_shared is False
-    await settle()
-    assert int(dut.cache_rsp_val.value) == 0
-    assert int(dut.cache_req_rdy.value) == 1
+    for source in range(L1_CACHE_CNT):
+        targets = ((1 << L1_CACHE_CNT) - 1) & ~(1 << source)
+        for replies in range(1 << L1_CACHE_CNT):
+            # Configure only between transactions; keep values stable in flight.
+            for port in range(L1_CACHE_CNT):
+                tb.pseudo_replier_delay(port, (port + replies) % L1_CACHE_CNT)
+                tb.pseudo_replier_resp(port, shared=bool(replies & (1 << port)))
+            for bus_op in (1, 2, 3):  # BusRd, BusRdX, BusUpgr (BusNOP stays local).
+                await tb.submit(source=source, bus_op=bus_op, address=0xABC0)
+                assert int(dut.bus_req_val.value) == targets
+                response_shared = await tb.wait_cache_response()
+                assert response_shared == bool(replies & targets), (
+                    f"source={source} replies={replies:04b} bus_op={bus_op}"
+                )
+                await settle()
+                assert int(dut.cache_rsp_val.value) == 0
+                assert int(dut.cache_req_rdy.value) == 1

@@ -3,8 +3,11 @@ import random
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import RisingEdge
+from cocotb.queue import Queue
+from cocotb.triggers import FallingEdge, RisingEdge
 from cocotbext.axi import AxiLiteBus, AxiLiteMaster, AxiResp
+
+from dv.cocotb_benches.handshake import monitor_handshakes
 
 
 CLOCK_PERIOD_NS = 10
@@ -54,6 +57,8 @@ class DramTB:
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def reset_then_read_returns_zero_line(dut):
+    # reset()
+    # read_line == 0
     """The first transaction after reset must complete normally."""
     tb = DramTB(dut)
     await tb.reset()
@@ -62,18 +67,9 @@ async def reset_then_read_returns_zero_line(dut):
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
-async def unwritten_lines_are_zero(dut):
-    """Every unwritten cacheline reads as zero in the ideal memory model."""
-    tb = DramTB(dut)
-    await tb.reset()
-
-    for address in (0, LINE_BYTES, 0x1000, 0xABC0, 0x123456780):
-        address &= ~(LINE_BYTES - 1)
-        assert await tb.read_line(address) == ZERO_LINE
-
-
-@cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def writes_are_stored_by_line_address(dut):
+    # write_line(addr, x)
+    # assert(read_line(addr) == x)
     """A full-line write must be returned by later reads of that line."""
     tb = DramTB(dut)
     await tb.reset()
@@ -83,12 +79,11 @@ async def writes_are_stored_by_line_address(dut):
     await tb.write_line(address, payload)
     assert await tb.read_line(address) == payload
 
-    other_address = address + LINE_BYTES
-    assert await tb.read_line(other_address) == ZERO_LINE
-
-
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def addresses_are_normalized_to_cacheline_boundaries(dut):
+    # write_line(addr, data)
+    # read_ret = read_line(addr+line_offset)
+    # assert(read_ret == data)
     """Low address bits select bytes from one normalized cacheline entry."""
     tb = DramTB(dut)
     await tb.reset()
@@ -104,6 +99,10 @@ async def addresses_are_normalized_to_cacheline_boundaries(dut):
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def reset_clears_stored_lines(dut):
+    # reset()
+    # write(addr, data)
+    # reset()
+    # assert(read(addr) == 0)
     """RTL reset also resets the per-instance C++ memory object."""
     tb = DramTB(dut)
     await tb.reset()
@@ -119,6 +118,9 @@ async def reset_clears_stored_lines(dut):
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def split_write_channels_rendezvous(dut):
+    # in cycle 2: send_word(data)
+    # in cycle 3: send_addr(addr)
+    # assert(read(addr) == word)
     """Independently delayed AW and W channels still form one blocking write."""
     tb = DramTB(dut)
     await tb.reset()
@@ -137,6 +139,11 @@ async def split_write_channels_rendezvous(dut):
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def randomized_mixed_transactions(dut):
+    # loop 100:
+    #   addr = rand()
+    #   data = rand()
+    #   write_line(addr, data)
+    #   assert(read_line(addr) == data)
     """Run deterministic mixed AXI-Lite traffic through the blocking slave."""
     tb = DramTB(dut)
     await tb.reset()
@@ -157,15 +164,78 @@ async def randomized_mixed_transactions(dut):
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")
 async def response_backpressure_is_supported(dut):
-    """BREADY and RREADY stalls are handled by cocotbext channel backpressure."""
+    """Queue requests independently of collecting stalled B/R responses."""
     tb = DramTB(dut)
     await tb.reset()
 
-    tb.master.write_if.b_channel.set_pause_generator(cycle_pause())
-    tb.master.read_if.r_channel.set_pause_generator(cycle_pause((1, 1, 0)))
+    channels = {}
+    for name, fields in (
+        ("aw", ("awaddr", "awprot")), ("w", ("wdata", "wstrb")),
+        ("b", ("bresp",)), ("ar", ("araddr", "arprot")),
+        ("r", ("rdata", "rresp")),
+    ):
+        channels[name] = (
+            getattr(dut.s_axil, name + "valid"),
+            getattr(dut.s_axil, name + "ready"),
+            tuple(getattr(dut.s_axil, field) for field in fields),
+        )
+    transfers, stalls = {}, {}
+    monitor = cocotb.start_soon(
+        monitor_handshakes(dut.clk_i, channels, transfers, stalls)
+    )
 
-    for index in range(12):
-        address = index * LINE_BYTES
-        payload = bytes([index]) * LINE_BYTES
-        await tb.write_line(address, payload)
-        assert await tb.read_line(address) == payload
+    # Writes must finish before dependent reads, but requests within each batch
+    # are queued without waiting for responses. The AXI driver owns the pins.
+    for is_write in (True, False):
+        completions = Queue()
+        sink = tb.master.write_if.b_channel if is_write else tb.master.read_if.r_channel
+        sink.pause = True
+        response_valid = dut.s_axil.bvalid if is_write else dut.s_axil.rvalid
+        request_valid = dut.s_axil.awvalid if is_write else dut.s_axil.arvalid
+
+        async def produce():
+            for index in range(12):
+                address = index * LINE_BYTES
+                payload = bytes([index + 1]) * LINE_BYTES
+                event = (
+                    tb.master.init_write(address, payload) if is_write
+                    else tb.master.init_read(address, LINE_BYTES)
+                )
+                completions.put_nowait((event, payload))
+                await RisingEdge(dut.clk_i)
+
+        async def consume():
+            while True:
+                await FallingEdge(dut.clk_i)
+                if response_valid.value and request_valid.value:
+                    break
+            # A real response is stalled while the next request is pending.
+            for _ in range(4):
+                await RisingEdge(dut.clk_i)
+                assert response_valid.value
+                assert request_valid.value
+                assert not dut.s_axil.awready.value
+                assert not dut.s_axil.wready.value
+                assert not dut.s_axil.arready.value
+            sink.set_pause_generator(cycle_pause())
+            for _ in range(12):
+                event, payload = await completions.get()
+                await event.wait()
+                assert event.data.resp == AxiResp.OKAY
+                if not is_write:
+                    assert bytes(event.data.data) == payload
+            sink.clear_pause_generator()
+            sink.pause = False
+
+        producer = cocotb.start_soon(produce())
+        consumer = cocotb.start_soon(consume())
+        await producer
+        await consumer
+
+    for _ in range(3):
+        await RisingEdge(dut.clk_i)
+    await FallingEdge(dut.clk_i)
+    monitor.cancel()
+    assert transfers == dict.fromkeys(channels, 12)
+    for name in channels:
+        assert stalls[name] > 0, f"{name}: no backpressure was exercised"

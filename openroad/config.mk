@@ -49,4 +49,4 @@ export PLACE_DENSITY = 0.60
 
 # Use unrealistic large memory just to pass flow and get delay info in top module
 # export SYNTH_MEMORY_MAX_BITS = 144384
-export SYNTH_MOCK_LARGE_MEMORIES=1
+# export SYNTH_MOCK_LARGE_MEMORIES=1
