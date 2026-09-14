@@ -1,5 +1,7 @@
+import json
 import random
 from dataclasses import dataclass
+from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
@@ -12,6 +14,17 @@ CLOCK_PERIOD_NS = 10
 TEST_TIMEOUT_US = 100
 SWEEP_TIMEOUT_MS = 10
 SWEEP_MAX_DELAY_CYCLES = 300
+
+COH_PROTOCOL = json.loads(
+    (Path(__file__).resolve().parents[2] / "rtl/config.json").read_text()
+)["COH_PROTOCOL"]
+if COH_PROTOCOL["MESI"]:
+    SWEEP_INITIAL_STATES = ["II", "SS", "MI", "IM", "EI", "IE"]
+elif COH_PROTOCOL["MSI"]:
+    SWEEP_INITIAL_STATES = ["II", "SS", "MI", "IM", "SI", "IS"]
+else:
+    raise ValueError("The coherence sweep supports only MESI or MSI")
+
 DATA_BYTES = 8
 LINE_BYTES = 64
 CACHE_SIZE_BYTES = 16 * 1024
@@ -618,7 +631,7 @@ async def e2e_write_then_write(dut):
 
 
 @cocotb.test(timeout_time=SWEEP_TIMEOUT_MS, timeout_unit="ms")
-@cocotb.parametrize(initial=["II", "SS", "MI", "IM", "EI", "IE"])
+@cocotb.parametrize(initial=SWEEP_INITIAL_STATES)
 async def e2e_request_offset_sweep(dut, initial):
     """Sweep simultaneous/offset requests from cold, shared and owned lines."""
     tb = CacheDramTB(dut)
@@ -639,6 +652,8 @@ async def e2e_request_offset_sweep(dut, initial):
             await tb.write_word(initial.index("M"), target_addr, initial_line[:DATA_BYTES])
         elif "E" in initial:
             assert await tb.read_word(initial.index("E"), target_addr) == ZERO_WORD
+        elif "S" in initial:
+            assert await tb.read_word(initial.index("S"), target_addr) == ZERO_WORD
         for port, expected_state in enumerate(initial_states):
             assert tb.cache_line(port, target_addr).state == expected_state
             if expected_state != COH_INVALID:

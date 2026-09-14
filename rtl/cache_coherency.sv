@@ -7,7 +7,7 @@ import config_pkg::*;
     test_framework = "cocotb",
     use_wrapper = true,
     test_path = "dv/cocotb_benches/cache_coherency_local_tb.py",
-    rtl_dependencies = ["MESI_protocol.sv"]) %}
+    rtl_dependencies = ["MESI_protocol.sv", "MSI_protocol.sv"]) %}
 module cache_coherency_local #(
     parameter int unsigned ADDR_WIDTH = 64
 ) (
@@ -82,7 +82,14 @@ module cache_coherency_local #(
         ? req_is_write_i : req_is_write_q;
     assign effective_coh = req_is_hit_i ? req_coh_i : COH_Invalid;
 
+{% if COH_PROTOCOL.MESI %}
     MESI_judger mesi_judger_inst (
+{% elif COH_PROTOCOL.MSI %}
+    MSI_judger msi_judger_inst (
+{% else %}
+    // No implementation yet: unsupported selections must fail elaboration.
+    unsupported_coherency_protocol judger_inst (
+{% endif %}
         .begin_judge(begin_mesi_judge),
         .req_is_write_i(judged_is_write),
         .current_coh_i(effective_coh),

@@ -1,6 +1,6 @@
 {
   "RENDER_OPTION": {
-    "SYNTH": true
+    "SYNTH": false
   },
   "UART0": {
     "ENABLE": false,
@@ -8,5 +8,10 @@
     "AXI_DATAW": 8,
     "PRE_W": 16,
     "BAUD": 115200
+  },
+  "COH_PROTOCOL": {
+      "MESI": false,
+      "MSI": true,
+      "MOESI": false
   }
 }

@@ -9,6 +9,7 @@
 // | M              | Read          | BusNOP        | M           |
 // | M              | Write         | BusNOP        | M           |
 
+{% if COH_PROTOCOL.MESI %}
 `timescale 1ns / 1ps
 import config_pkg::*;
 
@@ -82,3 +83,4 @@ module MESI_judger (
 
 endmodule
 /* verilator lint_on DECLFILENAME */
+{% endif %}

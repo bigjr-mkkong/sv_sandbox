@@ -21,6 +21,7 @@ import config_pkg::*;
     test_path = "dv/cocotb_benches/1rw_simple_cache_tb.py",
     rtl_dependencies = [
         "MESI_protocol.sv",
+        "MSI_protocol.sv",
         "cache_coherency.sv",
         "cache_bank.sv",
         "cache_committer.sv",

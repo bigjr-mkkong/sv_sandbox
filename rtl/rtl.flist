@@ -21,6 +21,7 @@ third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync.sv
 rtl/config_pkg.sv
 rtl/1rw_dumb_dram.sv
 rtl/MESI_protocol.sv
+rtl/MSI_protocol.sv
 rtl/cache_coherency.sv
 rtl/coh_bus_arbiter.sv
 rtl/cache_bank.sv
