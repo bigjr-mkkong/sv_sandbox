@@ -176,15 +176,21 @@ module cache_committer #(
     observed_cache_line_t pseudo_cache [ROW_CNT-1:0];
 {% endif %}
 
+    // Arbitration gates bank enables, not the wide write-data path.
+    assign selected_data = remote_commit.val
+        ? remote_commit.data : main_commit.data;
+    // SRAM write tags do not depend on lookup selection or bank readiness.
+    // The lookup comparison tag is captured separately on read_fire.
+    assign selected_tag = remote_commit.val
+        ? remote_commit.tag : main_commit.tag;
+
     always_comb begin
         selected_v = 1'b0;
         selected_write = 1'b0;
         selected_tag_we = 1'b0;
         selected_data_we = 1'b0;
         selected_index = '0;
-        selected_tag = '0;
         selected_coh = COH_Invalid;
-        selected_data = '0;
         selected_read_owner = REMOTE_OWNER;
 
         remote_commit.rdy = 1'b0;
@@ -199,14 +205,11 @@ module cache_committer #(
                 selected_tag_we = remote_commit.tag_we;
                 selected_data_we = remote_commit.data_we;
                 selected_index = remote_commit.index;
-                selected_tag = remote_commit.tag;
                 selected_coh = remote_commit.coh;
-                selected_data = remote_commit.data;
                 remote_commit.rdy = 1'b1;
             end else if (remote_snoop.req_val) begin
                 selected_v = 1'b1;
                 selected_index = remote_snoop.idx;
-                selected_tag = remote_snoop.tag;
                 selected_read_owner = REMOTE_OWNER;
                 remote_snoop.req_rdy = 1'b1;
             end else if (main_commit.val) begin
@@ -215,14 +218,11 @@ module cache_committer #(
                 selected_tag_we = main_commit.tag_we;
                 selected_data_we = main_commit.data_we;
                 selected_index = main_commit.index;
-                selected_tag = main_commit.tag;
                 selected_coh = main_commit.coh;
-                selected_data = main_commit.data;
                 main_commit.rdy = 1'b1;
             end else if (main_snoop.req_val) begin
                 selected_v = 1'b1;
                 selected_index = main_snoop.idx;
-                selected_tag = main_snoop.tag;
                 selected_read_owner = MAIN_OWNER;
                 main_snoop.req_rdy = 1'b1;
             end
@@ -271,7 +271,8 @@ module cache_committer #(
         if (read_fire) begin
             read_owner_d = selected_read_owner;
             read_index_d = selected_index;
-            read_requested_tag_d = selected_tag;
+            read_requested_tag_d = remote_snoop.req_val
+                ? remote_snoop.tag : main_snoop.tag;
             state_d = READ_CAPTURE;
         end
 

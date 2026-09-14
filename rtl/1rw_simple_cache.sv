@@ -92,7 +92,6 @@ module simple_cache_1rw #(
     logic [ADDR_WIDTH-1:0] target_addr;
     logic [TAG_WIDTH-1:0] target_addr_tag;
     logic [INDEX_BITS-1:0] target_addr_idx;
-    logic [WORD_INDEX_WIDTH-1:0] target_word_idx;
     logic [ADDR_WIDTH-1:0] target_line_addr;
     logic [ADDR_WIDTH-1:0] victim_line_addr;
 
@@ -308,10 +307,9 @@ module simple_cache_1rw #(
     always_comb begin
         target_addr = state_q == IDLE
             ? ADDR_WIDTH'(upstream.req_addr) : req_addr_q;
-        {target_addr_tag, target_addr_idx, target_word_idx} = {
+        {target_addr_tag, target_addr_idx} = {
             TAG_WIDTH'(target_addr >> (OFFSET_WIDTH + INDEX_BITS)),
-            INDEX_BITS'(target_addr >> OFFSET_WIDTH),
-            WORD_INDEX_WIDTH'(target_addr >> BYTE_OFFSET_WIDTH)
+            INDEX_BITS'(target_addr >> OFFSET_WIDTH)
         };
 
         target_line_addr = {
@@ -352,9 +350,40 @@ module simple_cache_1rw #(
         );
     end
 
+    // A refill always writes the latched request's tag. tag_we gates its use.
+    assign main_commit.tag = req_addr_q[OFFSET_WIDTH + INDEX_BITS +: TAG_WIDTH];
+
+    // Prepare write data independently of coherence/arbitration readiness.
+    // Only val && rdy && data_we writes data; the payload is unused otherwise.
+    always_comb begin
+        main_commit.data = state_q == MISS_WAIT
+            ? main_llc_rsp_data : main_lookup_result_data_q;
+        if (req_is_write_q) begin
+            main_commit.data[
+                req_addr_q[BYTE_OFFSET_WIDTH +: WORD_INDEX_WIDTH]
+            ] = req_data_q;
+        end
+    end
+
+    // Prepare the response before its completion conditions are resolved.
+    // Only the source, latched word offset and request type affect the data.
+    // RESP freezes rsp_data_q below, including while upstream is stalled.
+    always_comb begin
+        rsp_data_d = state_q == MISS_WAIT
+            ? main_llc_rsp_data[
+                req_addr_q[BYTE_OFFSET_WIDTH +: WORD_INDEX_WIDTH]
+                    * DATA_WIDTH +: DATA_WIDTH
+            ]
+            : main_lookup_result_data_q[
+                req_addr_q[BYTE_OFFSET_WIDTH +: WORD_INDEX_WIDTH]
+            ];
+        if (req_is_write_q) begin
+            rsp_data_d = '0;
+        end
+    end
+
     always_comb begin
         state_d = state_q;
-        rsp_data_d = rsp_data_q;
         req_addr_d = req_addr_q;
         req_data_d = req_data_q;
         req_is_write_d = req_is_write_q;
@@ -384,9 +413,7 @@ module simple_cache_1rw #(
         main_commit.index = '0;
         main_commit.coh = COH_Invalid;
         main_commit.tag_we = 1'b0;
-        main_commit.tag = '0;
         main_commit.data_we = 1'b0;
-        main_commit.data = '0;
 
         unique case (state_q)
             IDLE: begin
@@ -484,11 +511,8 @@ module simple_cache_1rw #(
                         main_commit.index = target_addr_idx;
                         main_commit.coh = local_result_coh;
                         main_commit.data_we = 1'b1;
-                        main_commit.data = main_lookup_result_data_q;
-                        main_commit.data[target_word_idx] = req_data_q;
                         coh_rsp_rdy_i = main_commit.rdy;
                         if (main_commit.rdy) begin
-                            rsp_data_d = '0;
                             state_d = RESP;
                         end
                     end else if (local_coh_commit) begin
@@ -498,17 +522,11 @@ module simple_cache_1rw #(
                         main_commit.coh = local_result_coh;
                         coh_rsp_rdy_i = main_commit.rdy;
                         if (main_commit.rdy) begin
-                            rsp_data_d = main_lookup_result_data_q[
-                                target_word_idx
-                            ];
                             state_d = RESP;
                         end
                     end else begin
                         result_coh_d = local_result_coh;
                         coh_rsp_rdy_i = 1'b1;
-                        rsp_data_d = main_lookup_result_data_q[
-                            target_word_idx
-                        ];
                         state_d = RESP;
                     end
                 end
@@ -528,20 +546,10 @@ module simple_cache_1rw #(
                     main_commit.index = target_addr_idx;
                     main_commit.coh = result_coh_q;
                     main_commit.tag_we = 1'b1;
-                    main_commit.tag = target_addr_tag;
                     main_commit.data_we = 1'b1;
-                    main_commit.data = main_llc_rsp_data;
-
-                    if (req_is_write_q) begin
-                        main_commit.data[target_word_idx] = req_data_q;
-                    end
 
                     main_llc_rsp_rdy = main_commit.rdy;
                     if (main_commit.rdy) begin
-                        rsp_data_d = req_is_write_q ? '0
-                            : main_llc_rsp_data[
-                                target_word_idx * DATA_WIDTH +: DATA_WIDTH
-                            ];
                         state_d = RESP;
                     end
                 end
@@ -568,7 +576,9 @@ module simple_cache_1rw #(
 
         end else begin
             state_q <= state_d;
-            rsp_data_q <= rsp_data_d;
+            if (state_q != RESP) begin
+                rsp_data_q <= rsp_data_d;
+            end
             req_addr_q <= req_addr_d;
             req_data_q <= req_data_d;
             req_is_write_q <= req_is_write_d;

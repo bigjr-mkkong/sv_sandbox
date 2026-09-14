@@ -289,7 +289,13 @@ async def global_blocking_priority_and_held_response(dut):
         tag_we=True, tag=old_tag, data_we=True, data=old_data,
     )
 
-    drive_commit(dut, "remote", index=row, coh=COH_SHARED)
+    # Exercise remote tag writes while both lookup tags and a main write
+    # compete. Include high bits so the complete SRAM tag path is checked.
+    old_tag |= (1 << 49) | (1 << 42)
+    drive_commit(
+        dut, "remote", index=row, coh=COH_SHARED,
+        tag_we=True, tag=old_tag,
+    )
     drive_snoop(dut, "remote", index=row, tag=old_tag)
     drive_commit(
         dut, "main", index=row, coh=COH_EXCLUSIVE,

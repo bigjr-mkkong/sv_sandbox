@@ -1,0 +1,9 @@
+## Worst setup path
+report_checks -path_delay max -group_path_count 5 -format full_clock_expanded -fields {slew capacitance fanout input_pin net} -digits 4
+
+## Worst  hold path
+report_checks -path_delay min -group_path_count 5 -format full_clock_expanded -fields {slew capacitance fanout input_pin net} -digits 4
+
+
+report_wns
+report_tns
