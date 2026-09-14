@@ -7,3 +7,15 @@ report_checks -path_delay min -group_path_count 5 -format full_clock_expanded -f
 
 report_wns
 report_tns
+report_clock_min_period
+
+# Clockskew
+report_clock_skew -setup
+report_clock_skew -hold
+
+# Query how much Positive Margin left
+# Setup
+report_worst_slack -max -digits 4
+
+# Hold
+report_worst_slack -min -digits 4
