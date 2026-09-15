@@ -1,6 +1,6 @@
 {
   "RENDER_OPTION": {
-    "SYNTH": false
+    "SYNTH": true
   },
   "UART0": {
     "ENABLE": false,
@@ -10,8 +10,8 @@
     "BAUD": 115200
   },
   "COH_PROTOCOL": {
-      "MESI": false,
-      "MSI": true,
+      "MESI": true,
+      "MSI": false,
       "MOESI": false
   }
 }

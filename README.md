@@ -1,267 +1,199 @@
-# SystemVerilog FPGA Template
+# Dual-L1 Coherent Cache
 
-This repository is a small, complete SystemVerilog flow built around OSS CAD
-Suite. The example design continuously transmits `A` through `Z` at 115200 baud
-and includes RTL simulation, cocotb, generic Yosys synthesis, generic
-post-synthesis simulation, and an iCEBreaker bitstream flow. A Vivado target is
-provided for the Basys 3.
+A SystemVerilog implementation of **two 16 KiB direct-mapped L1 caches** with
+render-time selectable **MESI or MSI coherence**. The project combines RTL
+verification, gem5 trace-driven profiling, and physical-design optimization
+with OpenROAD and Nangate45, reaching approximately **850 MHz** in static
+timing analysis.
 
-All generated files go under `build/` (except Vivado's project under
-`synth/vivado_basys3/build/`). Running `make` only prints help; it does not render
-or delete files as a side effect.
+![Routed dual-cache layout with SRAM groups above and below the control region](final_all.webp)
 
-## Requirements
+*OpenROAD physical implementation: cache 0 SRAMs at the top, cache 1 SRAMs at
+the bottom, and an open central region for control logic.*
 
-- Git and Python 3
-- [OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build/releases),
-  including Verilator, cocotb, Yosys with the Slang plugin, nextpnr-ice40,
-  IceStorm, and openFPGALoader
-- Vivado only for the optional Basys 3 bitstream
+## Architecture
 
-The Makefile automatically uses OSS CAD Suite from `/opt/oss-cad-suite` and a
-Python virtual environment from `./venv`. You do not need to source either
-environment before running `make`. If OSS CAD Suite is elsewhere, either put its
-`bin` directory on `PATH` or pass `OSS_CAD_SUITE=/path/to/oss-cad-suite`.
+- **32 KiB total data capacity:** two independent 16 KiB direct-mapped caches,
+  each with 256 lines of 64 bytes.
+- **64-bit accesses:** eight words per cache line, with separate ready/valid
+  request and response interfaces.
+- **Blocking CPU interfaces:** each cache completes its current request before
+  accepting the next, while the two caches operate concurrently.
+- **Snooping coherence:** MESI and MSI share controller interfaces and are
+  selected during Jinja RTL rendering. MOESI is not implemented.
+- **Remote-operation priority:** conflicting snoops take precedence over local
+  updates; local coherence decisions are re-evaluated when necessary.
+- **Banked storage:** synchronous SRAMs hold data and tags; flip-flops hold
+  coherence state. Simulation uses BaseJump memory models, while synthesis
+  maps storage to Nangate45 `fakeram45_128x64` macros.
 
-Set up a fresh checkout with:
+The integrated test system includes bus arbitration, snoop responders, and a
+shared backend memory path. No CPU core is required to exercise the caches.
 
-```bash
+## Physical implementation
+
+The Yosys/Slang and OpenROAD flow targets **Nangate45**. RTL timing work separates
+data selection from deep control logic. The floorplan groups each cache's
+18 SRAM macros into two rows of nine, above and below the control region,
+with a core height-to-width aspect ratio of **0.70**.
+
+The resulting implementation achieves approximately **850 MHz** in STA. This
+is a modeled physical-design result, not a measured silicon frequency:
+FakeRAM timing models and an optimistic **20 ps input/output delay** represent
+the SRAMs and the boundary to an absent CPU core. The checked-in
+[SDC](openroad/top_module.sdc) specifies a 1.18 ns clock period (about 847 MHz).
+
+## MESI versus MSI: trace-driven profiling
+
+Static memory-access traces generated with **gem5** are replayed into the RTL
+using independent cocotb drivers. Each driver respects backpressure and waits
+for its previous response before issuing another request. The control workload
+drives only cache 0; cache 1's CPU interface remains idle.
+
+| Access pattern | MSI cycles | MESI cycles | MESI cycle reduction |
+| --- | ---: | ---: | ---: |
+| Private read/write — separate cache lines | 439,035 | 358,523 | **18.34%** |
+| Control — single-cache reads | 50,054 | 50,045 | 0.018% |
+| Contended — reader/writer on the same line | 380,045 | 380,033 | 0.003% |
+
+MESI's **Exclusive (E)** state explains the private read/write improvement.
+An unshared read fill can enter E, allowing a subsequent write to transition
+silently from **E to Modified (M)**. MSI instead installs the read line in
+**Shared (S)** and must issue `BusUpgr` before writing, even if no other cache
+currently holds it. Avoiding those upgrades saves bus traffic and contention.
+Writes to genuinely shared S lines require an upgrade under **both** protocols,
+which is why MESI provides little benefit in the contended case.
+
+Cycles run from completion of reset to the last CPU response across the active
+drivers; they exclude a final dirty-cache flush. Reduction is
+`(MSI cycles - MESI cycles) / MSI cycles`. Workloads have different request
+counts, so compare protocols within each row.
+
+Traces contain operation, address, and byte size, but no timestamps or data.
+Replay covers the aligned 64-bit words touched by each access, uses zero-valued
+writes, and drains reads without checking their values. These results measure
+**cache traffic performance**, not full application runtime or data correctness.
+
+## Verification
+
+The Verilator/cocotb framework provides two complementary levels of checking:
+
+- **Per-module unit tests** exercise protocol decisions, local/global coherence
+  controllers, arbitration, cache storage/commit, and backend transactions.
+  RTL templates register their tests with the renderer; the unit-test runner
+  executes them independently.
+- **End-to-end tests** check read/write behavior, line fills, dirty evictions,
+  data preservation, and interactions between both caches. The concurrency
+  timing sweep covers read/read, read/write, write/read, and write/write pairs
+  with request offsets from **0 through 300 cycles**, including simultaneous
+  requests and pending-upgrade re-evaluation.
+
+The same sweep selects six initial-state pairs from `rtl/config.json`: MESI
+uses `II`, `SS`, `MI`, `IM`, `EI`, and `IE`; MSI replaces `EI`/`IE` with `SI`/`IS`.
+That gives **7,224 scenario/offset combinations per protocol**. Functional
+verification is separate from the traffic-only profiling experiment.
+
+## Getting started
+
+### Prerequisites
+
+- Git, GNU Make, Python 3, and a C++ build toolchain.
+- Verilator; the Makefile supports an OSS CAD Suite installation at
+  `/opt/oss-cad-suite` or a custom `OSS_CAD_SUITE` path.
+- For physical implementation: Docker and a local OpenROAD-flow-scripts
+  checkout, with an image containing OpenROAD, Yosys/Slang, and Nangate45.
+
+From the repository root:
+
+```sh
 git submodule update --init --recursive
 make setup
-make doctor
 ```
 
-`make setup` creates `venv/` and installs the packages in `requirements.txt`.
+`make setup` creates `venv/` and installs the pinned Python dependencies. The
+Makefile uses this environment automatically.
 
-## Common workflow
+### Configure and simulate
 
-```bash
-# Render and lint RTL
-make lint
-
-# Compile or run the SystemVerilog testbench with verilator
-make compile
-make test
-
-# Run the cocotb test
-make test-cocotb
-
-# Run every unit test registered by an RTL template
-make unit_test
-
-# Build and test a generic Yosys post-synthesis netlist
-make synth
-make test-gls
-
-# Build and test the iCE40-mapped iCEBreaker design
-make icebreaker-bitstream
-make test-icebreaker-gls
-
-# Run every open-source check above
-make check
-
-# Remove generated files
-make clean
-```
-
-Both RTL tests and both post-synthesis tests decode the UART output and verify
-the first two bytes are `A` and `B`. The iCEBreaker post-synthesis simulation
-bypasses the PLL because the open-source iCE40 primitive model does not simulate
-PLL behavior; synthesis, place-and-route, timing analysis, and bitstream
-generation use a PLL module generated by `icepll`.
-
-`make check` also syntax-checks the Basys 3 SystemVerilog source set. The full
-Basys 3 implementation still requires the proprietary Vivado target below.
-
-## RTL unit tests
-
-An RTL template can register a module-level test with Jinja's `do` extension:
-
-```jinja
-{% do unit_test(
-    module_name = "simple_cache_1rw",
-    test_framework = "cocotb",
-    use_wrapper = true,
-    test_path = "dv/cocotb_benches/1rw_simple_cache_tb.py") %}
-```
-
-`module_name` is the rendered SystemVerilog module to use as the DUT,
-`test_framework` selects the runner (currently only `cocotb` is supported), and
-`test_path` locates the Python test module. `use_wrapper` defaults to `false`.
-When enabled, the runner compiles all RTL files under `dv/cocotb_wrappers/` and
-uses `<module_name>_unit_test` as the cocotb top-level. During `make prepare`,
-the renderer collects these declarations and writes `build/.unit-test.json`:
-
-```json
-[
-  {
-    "module_name": "simple_cache_1rw",
-    "test_framework": "cocotb",
-    "test_path": "dv/cocotb_benches/1rw_simple_cache_tb.py",
-    "use_wrapper": true
-  }
-]
-```
-
-Rendering only records metadata; it never executes tests. `make unit_test`
-invokes `misc/unit-test.py`, locates each DUT in the rendered RTL tree, and runs
-the registered test through the existing cocotb make flow. Each module gets an
-independent directory under `build/unit-test/`. The command uses the Python
-environment created by `make setup`, so no manual virtual-environment activation
-is required.
-
-For Verilator simulations, `Makefile.cocotb` automatically compiles every
-`*.cpp` file directly under `cpp/`. This directory is intended for DPI-C models
-and other C++ simulation support; its contents are not part of the RTL flist or
-synthesis inputs.
-
-## Configuration and source files
-
-Edit [`rtl/config.json`](rtl/config.json) to configure rendered third-party
-module integrations:
+Edit [rtl/config.json](rtl/config.json). For the MESI simulation workflow, set
+the following fields while retaining the other configuration entries:
 
 ```json
 {
-  "UART0": {
-    "ENABLE": true,
-    "module_name": "taxi_uart",
-    "AXI_DATAW": 8,
-    "PRE_W": 16,
-    "BAUD": 115200
-  }
+  "RENDER_OPTION": { "SYNTH": false },
+  "COH_PROTOCOL": { "MESI": true, "MSI": false, "MOESI": false }
 }
 ```
 
-Every top-level object represents one configurable external module instance and
-must have an `ENABLE` Boolean (`true` or `false`) and a `module_name` matching
-the SystemVerilog module declaration to instantiate. The top-level object may
-also be empty; integrations omitted from it are treated as disabled by their
-template guards. The template currently has
-one such instance, `UART0`, linked to Taxi's `taxi_uart` module. Jinja resolves
-this choice during `make prepare`, before Verilator or Yosys reads the RTL. With
-`UART0.ENABLE` set to `false`, the rendered `top_module` contains no UART
-instance and holds `txd_o` high. The supplied UART tests expect the example
-module to be enabled.
+Keep `UART0.ENABLE` false. To select MSI, set `MESI` false and `MSI` true;
+enable exactly one supported protocol. Configuration is resolved at rendering
+time, not switched at runtime.
 
-### Finding configuration fields: a beginner's guide
+```sh
+make lint
+make unit-test
+make test-cocotb
 
-The configuration file is not a list of every parameter in a third-party
-library. It contains only the parameters selected by this project's integration
-templates. Use the following path to understand or add a field:
-
-1. Start in [`rtl/top_module.sv`](rtl/top_module.sv). Jinja expressions such as
-   `{{ UART0.PRE_W }}` show the exact JSON object and field consumed at the
-   third-party integration point. Jinja `{% if ... %}` blocks show what an
-   `ENABLE` switch controls, and `{{ UART0.module_name }}` identifies the
-   external module instantiated by that block.
-2. Follow each expression to the port, interface, parameter, or calculation it
-   configures. For example, `UART0.PRE_W` is passed directly to Taxi's `PRE_W`
-   parameter, while `UART0.BAUD` participates in the `prescale` calculation.
-3. Open the third-party module declaration to check the parameter's meaning,
-   type, and default. For this example, Taxi declares `PRE_W` in
-   `third_party/taxi/src/lss/rtl/taxi_uart.sv`, while its AXI-stream interface
-   declares `DATA_W` in
-   `third_party/taxi/src/axis/rtl/taxi_axis_if.sv`. Also consult the library's
-   README or documentation under `third_party/<library>/`.
-4. Render and inspect the result with `make prepare`. Generated files are under
-   `build/rtl/`; do not edit them because the next render replaces them. Then
-   run `make lint` and the tests appropriate for the enabled modules.
-
-The current UART fields are:
-
-| Field | Meaning | Where to verify it |
-| --- | --- | --- |
-| `ENABLE` | Render `UART0` when `true`; render idle `txd_o` when `false` | Jinja block in `rtl/top_module.sv` |
-| `module_name` | SystemVerilog module instantiated for `UART0` | Module declaration in `taxi_uart.sv` |
-| `AXI_DATAW` | Width in bits of the UART's Taxi stream data | `taxi_axis_if.sv` parameter `DATA_W` |
-| `PRE_W` | Width in bits of Taxi's baud-rate prescaler | `taxi_uart.sv` parameter `PRE_W` |
-| `BAUD` | Desired symbols per second | Prescaler calculation in `rtl/top_module.sv` |
-
-Project-owned settings are deliberately separate. [`rtl/config_pkg.sv`](rtl/config_pkg.sv)
-is static SystemVerilog with no Jinja and currently defines `MAIN_DATA_WIDTH`
-and `CLOCK_FREQUENCY_HZ`. The project clock is combined with `UART0.BAUD` to
-calculate Taxi's prescale. Both supplied FPGA wrappers produce the configured
-48 MHz project clock. Change project-wide RTL settings in `config_pkg.sv`; do
-not copy third-party parameters into that package.
-
-`main_module` is independent of Taxi and is always instantiated. It exposes a
-plain ready/valid/data transmit channel. The Jinja block in `top_module` renders
-only the transport adapter: when UART0 is enabled it relays that channel to the
-Taxi interface; when disabled it drives ready low so the application retains
-its pending data. This keeps optional third-party transports out of the
-application module.
-
-When adding another external module, give it its own JSON object with `ENABLE`
-and `module_name` fields, add a matching conditional integration block that
-uses the JSON fields directly, and add all required source files to
-`rtl/rtl.flist`. Do not route those fields through `config_pkg.sv`. The selected
-module must provide the ports and parameters used by that integration block.
-The renderer validates every module link and reports missing enabled-UART
-configuration fields through Jinja's strict template evaluation.
-
-[`rtl/rtl.flist`](rtl/rtl.flist) is the single source manifest for project and
-third-party RTL. Files under `rtl/` are Jinja templates rendered into
-`build/rtl/`; third-party paths are compiled directly. Add a new synthesizable
-source in one place: `rtl/rtl.flist`.
-
-The renderer is dependency-driven. `make` reruns it only when a template, the
-manifest, the JSON configuration, or the renderer changes. Yosys reads the
-rendered SystemVerilog through its Slang frontend, so no `sv2v` conversion or
-generated third-party file list is needed.
-
-## FPGA targets
-
-### iCEBreaker
-
-The hardware flow runs `icepll` for the board's 12 MHz input and the project's
-48 MHz clock. It writes the generated module to
-`build/icebreaker/icebreaker_pll.v`; PLL divider coefficients are therefore not
-maintained by hand or stored in source control. `make icebreaker-pll` generates
-only this source, while the synthesis and bitstream targets regenerate it
-automatically.
-
-```bash
-# Volatile SRAM programming
-make program-icebreaker
-
-# Non-volatile flash programming
-make flash-icebreaker
+# Run only the end-to-end concurrency sweep, without waveform output.
+make test-cocotb COCOTB_TEST_FILTER=e2e_request_offset_sweep USER_SIM_ARGS=''
 ```
 
-These commands use openFPGALoader and intentionally do not invoke `sudo`.
-Configure the appropriate udev permissions for your board. Hardware programming
-is not run by `make check`.
+Start with MESI for the full regression; the protocol-aware timing sweep can
+also be run with MSI selected. Rendering happens automatically when inputs
+change. Edit sources under `rtl/`, not generated files under `build/rtl/`.
+Test outputs are under `build/unit-test/` and `build/cocotb-rtl/`.
 
-### Basys 3
+The `profiling()` block in [topmod_tb0.py](dv/cocotb_benches/topmod_tb0.py) is
+currently commented out to keep profiling separate from regression tests.
+To repeat the experiment, restore that block and its decorators, provide the
+locally generated traces under `dv/cocotb_benches/traces/<workload>/` as
+`<workload>_l1d_cpu0.txt` and `...cpu1.txt` (CPU 0 only for `control`), then run:
 
-Put Vivado on `PATH`, then run:
-
-```bash
-make vivado-bitstream
-make program-basys3
+```sh
+make test-cocotb COCOTB_TEST_FILTER=profiling USER_SIM_ARGS=''
 ```
 
-The Vivado target generates the 48 MHz clock IP, synthesizes and implements the
-UART design, and writes the bitstream beneath `synth/vivado_basys3/build/`.
-`program-basys3` uses openFPGALoader; it does not require the Vivado hardware
-manager.
+Each trace row is `R/W hexadecimal-address decimal-size-in-bytes`. Trace files
+are ignored by Git and must be supplied separately. Run once per protocol with
+identical traces and compare the logged `total_cycles` values.
 
-After programming either board, UART output can be monitored with:
+### Run OpenROAD
 
-```bash
-venv/bin/python3 read-uart.py --port /dev/ttyUSB0 --baud 115200
+Set `RENDER_OPTION.SYNTH` to **true** before physical implementation. The
+checked-in OpenROAD source list targets MESI; keep MESI selected for this flow.
+Simulation requires **false**, and the test targets reject synthesis mode.
+
+```sh
+# Substitute your local OpenROAD-flow-scripts checkout and installed image.
+make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
+    ORFS_IMAGE=openroad/orfs:latest DEFAULT_GOAL=floorplan
+
+# Full flow, including headless report-image generation for SSH/tmux sessions.
+make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
+    ORFS_IMAGE=openroad/orfs:latest \
+    DEFAULT_GOAL='all QT_QPA_PLATFORM=offscreen'
 ```
 
-## Repository layout
+Available stopping points are `synth`, `floorplan`, `place`, `cts`, `route`,
+`finish`, and `all`. Passing the Qt option through `DEFAULT_GOAL` ensures it
+reaches Make **inside Docker**, without requiring an authorized desktop display.
 
-- `rtl/`: Jinja-rendered project RTL, configuration, and the canonical manifest
-- `dv/`: SystemVerilog and cocotb tests
-- `lint/`: Verilator lint configuration
-- `misc/rtl_renderer.py`: RTL rendering engine used by `prepare.sh`
-- `misc/unit-test.py`: runner for unit tests registered by RTL templates
-- `synth/yosys_generic/`: generic netlist synthesis
-- `synth/icestorm_icebreaker/`: iCEBreaker wrapper, constraints, synthesis, P&R
-- `synth/vivado_basys3/`: Basys 3 wrapper, constraints, and Vivado batch flow
-- `third_party/`: BaseJump STL and Taxi git submodules
+[openroad/config.mk](openroad/config.mk) controls the platform, floorplan,
+source list, and run variant. [sram_placement.tcl](openroad/sram_placement.tcl)
+fixes the SRAM groups in place. Logs, reports, and results are collected under
+`openroad/output/`, with the current variant named `simple_cache`.
 
-Run `make help` for the current command list.
+`make clean` removes generated simulation and OpenROAD output; save any results
+you want to retain before running it.
+
+## Source map
+
+| Location | Purpose |
+| --- | --- |
+| [rtl/](rtl/) | Cache RTL, protocol logic, configuration, and source manifest |
+| [dv/cocotb_benches/](dv/cocotb_benches/) | Unit tests, end-to-end checks, and trace replay |
+| [dv/cocotb_wrappers/](dv/cocotb_wrappers/) | Module-level verification wrappers |
+| [misc/rtl_renderer.py](misc/rtl_renderer.py) | Jinja RTL rendering and test registration |
+| [misc/unit-test.py](misc/unit-test.py) | Registered module-test runner |
+| [openroad/](openroad/) | Physical-design configuration, constraints, and SRAM placement |
+| [third_party/](third_party/) | BaseJump STL and Taxi dependencies |

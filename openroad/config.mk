@@ -39,17 +39,18 @@ export ADDITIONAL_LEFS = \
 export ADDITIONAL_LIBS = \
     $(PLATFORM_DIR)/lib/fakeram45_128x64.lib
 
-# Initial physical-design parameters. These only provide a starting point for
-# the first timing experiment and are not intended as a tuned floorplan.
+# Coarse stacked floorplan: cache 0 SRAMs / control logic / cache 1 SRAMs.
 export CORE_UTILIZATION = 50
-export CORE_ASPECT_RATIO = 1
+export CORE_ASPECT_RATIO = 0.70
 export CORE_MARGIN = 2
 
 export PLACE_DENSITY = 0.60
+export MACRO_PLACE_HALO = 5 5
+export MACRO_BLOCKAGE_HALO = 5
 
-# Use unrealistic large memory just to pass flow and get delay info in top module
 # export SYNTH_MEMORY_MAX_BITS = 144384
 # export SYNTH_MOCK_LARGE_MEMORIES=1
 
-export PRE_MACRO_PLACE_TCL = $(PROJECT_HOME)/openroad/sram_guidance.tcl
-export FLOW_VARIANT = guided_v1
+export MACRO_PLACEMENT_TCL = $(PROJECT_HOME)/openroad/sram_placement.tcl
+# Keep the previous guided floorplan/results available for comparison.
+export FLOW_VARIANT = simple_cache

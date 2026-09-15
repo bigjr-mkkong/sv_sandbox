@@ -4,7 +4,7 @@
 
 create_clock \
     -name clk \
-    -period 1.0 \
+    -period 1.18 \
     [get_ports clk_i]
 
 set cpu_inputs [get_ports {
