@@ -6,6 +6,7 @@ from pathlib import Path
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import FallingEdge, RisingEdge
+from cocotb.utils import get_sim_time
 
 from dv.cocotb_benches.upstream_if import UpstreamMaster
 
@@ -254,6 +255,67 @@ class SameRowCacheModel:
         offset = address - line_address
         self.resident_data[offset:offset + DATA_BYTES] = data
         self.resident_dirty = True
+
+
+# NOTE
+# This function is for MESI/MSI performance profiling only. It's not one of the dv test
+# @cocotb.test(timeout_time=100, timeout_unit="ms")
+# @cocotb.parametrize(workload=["control", "shared", "contended", "private_rw"])
+# async def profiling(dut, workload):
+#     """Replay independent blocking CPU streams; exclude reset from cycle counts.
+
+#     Traces carry neither data nor timing: writes use zero, reads are drained
+#     without data comparison, and no inter-request delay is injected. Completion
+#     means the last CPU response, not flushing dirty lines back to DRAM.
+#     Each entry accesses every aligned 8-byte word overlapped by its byte range.
+#     Subword writes are modeled as whole-word writes, not byte-accurate stores.
+#     Control drives cache0 only; cache1's CPU interface remains idle.
+#     """
+#     tb = CacheDramTB(dut)
+#     await tb.reset()
+#     trace_dir = Path(__file__).resolve().parent / "traces" / workload
+#     start_ns = get_sim_time(unit="ns")
+
+#     async def replay(cache_index):
+#         path = trace_dir / f"{workload}_l1d_cpu{cache_index}.txt"
+#         count = 0
+#         entries = 0
+#         with path.open() as trace:
+#             for line_number, line in enumerate(trace, 1):
+#                 fields = line.split()
+#                 assert len(fields) == 3 and fields[0] in ("R", "W"), (
+#                     f"{path}:{line_number}: expected R/W, hexadecimal address, byte size"
+#                 )
+#                 address = int(fields[1], 16)
+#                 size = int(fields[2])
+#                 assert size > 0 and 0 <= address < address + size <= 1 << 64, (
+#                     f"{path}:{line_number}: invalid address/size {address:#x}/{size}"
+#                 )
+#                 # ponytail: whole-word traffic only; add byte masks for data validation.
+#                 for word_address in range(address & ~(DATA_BYTES - 1),
+#                                           address + size, DATA_BYTES):
+#                     # Wait for the response before offering another word or entry.
+#                     await tb.run_request(
+#                         cache_index, CacheRequest(word_address, is_write=fields[0] == "W")
+#                     )
+#                     count += 1
+#                 entries += 1
+#         assert count, f"Empty trace: {path}"
+#         cycles = int((get_sim_time(unit="ns") - start_ns) / CLOCK_PERIOD_NS)
+#         dut._log.info("profiling workload=%s cache%d entries=%d requests=%d cycles=%d",
+#                       workload, cache_index, entries, count, cycles)
+#         return count, cycles
+
+#     active_caches = 1 if workload == "control" else 2
+#     workers = [cocotb.start_soon(replay(port)) for port in range(active_caches)]
+#     results = [await worker for worker in workers]
+#     assert tb.pending_requests == [None, None]
+#     if workload == "control":
+#         assert int(tb.cpus[1].bus.req_val.value) == 0
+#         assert int(tb.cpus[1].bus.rsp_rdy.value) == 0
+#     dut._log.info("profiling workload=%s total_requests=%d total_cycles=%d",
+#                   workload, sum(count for count, _ in results),
+#                   max(cycles for _, cycles in results))
 
 
 @cocotb.test(timeout_time=TEST_TIMEOUT_US, timeout_unit="us")

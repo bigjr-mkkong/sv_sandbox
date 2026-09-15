@@ -12,3 +12,4 @@ venv/
 results.xml
 /openroad/output/
 MESI-impl-notes
+dv/cocotb_benches/traces/
