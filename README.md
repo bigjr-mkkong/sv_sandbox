@@ -137,12 +137,6 @@ For Verilator, C++ sources placed in `cpp/*.cpp` are automatically compiled and
 tracked as build dependencies, allowing DPI models without changing the make
 recipe. No cache-specific memory model is included.
 
-Run the lightweight renderer/runner checks with:
-
-```bash
-venv/bin/python3 -m unittest discover -s misc -p 'test_*.py'
-```
-
 ## Configuration and source files
 
 Edit [`rtl/config.json`](rtl/config.json) to configure rendered third-party

@@ -10,3 +10,4 @@ venv/
 .rtl_flist.tmp
 results.xml
 /openroad/output/
+/dv/cocotb_benches/traces
