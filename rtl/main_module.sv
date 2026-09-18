@@ -1,5 +1,11 @@
 `timescale 1ns / 1ps
 
+{% do unit_test(
+    module_name = "main_module",
+    test_framework = "cocotb",
+    test_path = "dv/cocotb_benches/main_module_tb.py",
+    use_wrapper = true) %}
+
 module main_module #(
     parameter int unsigned DATA_WIDTH = 8
 ) (

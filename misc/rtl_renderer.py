@@ -14,29 +14,14 @@ SV_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_$]*")
 SUPPORTED_TEST_FRAMEWORKS = {"cocotb"}
 
 
-def validate_config(config: object) -> dict:
-    """Validate the common fields of configured module instances."""
-    if not isinstance(config, dict):
-        raise ValueError("the top level of config.json must be a JSON object")
-
-    for instance_name, module_config in config.items():
-        if not isinstance(module_config, dict):
-            raise ValueError(f"{instance_name} must be a JSON object")
-        if not isinstance(module_config.get("ENABLE"), bool):
-            raise ValueError(f"{instance_name}.ENABLE must be true or false")
-
-        module_name = module_config.get("module_name")
-        if not isinstance(module_name, str) or not SV_IDENTIFIER.fullmatch(module_name):
-            raise ValueError(
-                f"{instance_name}.module_name must be a SystemVerilog identifier"
-            )
-
-    return config
-
-
 def unit_test(
-    *, module_name: str, test_framework: str, test_path: str
-) -> dict[str, str]:
+    *,
+    module_name: str,
+    test_framework: str,
+    test_path: str,
+    use_wrapper: bool = False,
+    rtl_dependencies: list[str] | None = None,
+) -> dict[str, object]:
     """Validate and create one unit-test manifest entry."""
     if not isinstance(module_name, str) or not SV_IDENTIFIER.fullmatch(module_name):
         raise ValueError("unit_test.module_name must be a SystemVerilog identifier")
@@ -50,11 +35,23 @@ def unit_test(
         )
     if not isinstance(test_path, str) or not test_path.strip():
         raise ValueError("unit_test.test_path must be a non-empty string")
+    if not isinstance(use_wrapper, bool):
+        raise ValueError("unit_test.use_wrapper must be true or false")
+    if rtl_dependencies is None:
+        rtl_dependencies = []
+    if not isinstance(rtl_dependencies, list) or not all(
+        isinstance(path, str) and path.strip() for path in rtl_dependencies
+    ):
+        raise ValueError(
+            "unit_test.rtl_dependencies must be a list of non-empty paths"
+        )
 
     return {
         "module_name": module_name,
         "test_framework": test_framework,
         "test_path": test_path,
+        "use_wrapper": use_wrapper,
+        "rtl_dependencies": rtl_dependencies,
     }
 
 
@@ -64,13 +61,15 @@ def render_tree(
     config_path: Path,
     unit_test_manifest: Path | None = None,
 ) -> None:
-    config = validate_config(json.loads(config_path.read_text(encoding="utf-8")))
-    registered_unit_tests: list[dict[str, str]] = []
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    if not isinstance(config, dict):
+        raise ValueError("the top level of config.json must be a JSON object")
+    registered_unit_tests: list[dict[str, object]] = []
     registered_modules: set[str] = set()
 
     def register_unit_test(**kwargs: object) -> None:
         entry = unit_test(**kwargs)
-        module_name = entry["module_name"]
+        module_name = str(entry["module_name"])
         if module_name in registered_modules:
             raise ValueError(
                 f"unit test for module {module_name} is registered more than once"

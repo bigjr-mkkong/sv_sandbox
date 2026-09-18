@@ -4,6 +4,7 @@ SHELL := /bin/bash
 PROJECT_ROOT := $(abspath .)
 OSS_CAD_SUITE ?= /opt/oss-cad-suite
 VENV ?= $(PROJECT_ROOT)/venv
+VENV_PYTHON ?= $(shell pyenv which python3 2>/dev/null || command -v python3)
 
 ifneq ($(wildcard $(OSS_CAD_SUITE)/bin),)
 export PATH := $(OSS_CAD_SUITE)/bin:$(OSS_CAD_SUITE)/py3bin:$(PATH)
@@ -12,6 +13,7 @@ export GHDL_PREFIX := $(OSS_CAD_SUITE)/lib/ghdl
 endif
 
 ifneq ($(wildcard $(VENV)/bin/python3),)
+export PATH := $(VENV)/bin:$(PATH)
 PYTHON ?= $(VENV)/bin/python3
 else
 PYTHON ?= python3
@@ -37,6 +39,11 @@ SIM_BINARY := $(SIM_DIR)/V$(TOP_TB)
 
 YOSYS_DATDIR = $(shell yosys-config --datdir 2>/dev/null)
 YOSYS_NETLIST := build/yosys/synth.v
+ORFS_HOME ?= $(abspath ../OpenROAD-flow-scripts)
+ORFS_IMAGE ?= openroad/orfs:latest
+ORFS_DESIGN_CONFIG ?= /work/openroad/config.mk
+DEFAULT_GOAL ?= all
+QT_QPA_PLATFORM ?= offscreen
 ICE_DIR := build/icebreaker
 ICE_PLL := $(ICE_DIR)/icebreaker_pll.v
 ICE_NETLIST := $(ICE_DIR)/synth.v
@@ -46,7 +53,7 @@ ICE_ASC := $(ICE_DIR)/icebreaker.asc
 ICE_BITSTREAM := $(ICE_DIR)/icebreaker.bit
 VIVADO_BITSTREAM := synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
 
-.PHONY: help setup doctor prepare lint compile test test-cocotb unit-test synth yosys \
+.PHONY: help setup doctor prepare lint compile test test-cocotb unit-test synth yosys orfs \
 	test-gls icebreaker-pll icebreaker-synth icebreaker-bitstream test-icebreaker-gls \
 	check-vivado-sources vivado-bitstream program-icebreaker flash-icebreaker program-basys3 \
 	check clean FORCE
@@ -63,6 +70,9 @@ help:
 	@echo "  make test-cocotb           Run the RTL cocotb test"
 	@echo "  make unit-test             Run registered RTL unit tests"
 	@echo "  make synth                 Build a generic Yosys netlist"
+	@echo "  make orfs DEFAULT_GOAL=<choice>  Run optional Docker-backed OpenROAD flow"
+	@echo "                             Choices: synth floorplan place cts route finish all"
+	@echo "                             Configure ORFS_HOME and ORFS_IMAGE; default goal: all"
 	@echo "  make test-gls              Test the generic post-synthesis netlist"
 	@echo "  make icebreaker-pll        Generate the iCEBreaker PLL source"
 	@echo "  make icebreaker-bitstream  Build the iCEBreaker bitstream"
@@ -73,7 +83,7 @@ help:
 	@echo "  make clean                 Remove generated files"
 
 setup:
-	python3 -m venv $(VENV)
+	$(VENV_PYTHON) -m venv $(VENV)
 	$(VENV)/bin/python3 -m pip install -r requirements.txt
 
 doctor:
@@ -109,7 +119,13 @@ compile: $(SIM_BINARY)
 test: $(SIM_BINARY)
 	$(SIM_BINARY) +verilator+rand+reset+2
 
+# Do not simulate RTL rendered for synthesis-only implementations.
+define check_simulation_config
+@$(PYTHON) -c 'import json, sys; synth = json.load(open("rtl/config.json")).get("RENDER_OPTION", {}).get("SYNTH", False); sys.exit("\n############################################################\n# SYNTH ON: simulation disabled. Set RENDER_OPTION.SYNTH=false.\n############################################################" if synth else 0)'
+endef
+
 test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmod_tb0.py
+	$(check_simulation_config)
 	$(MAKE) -f Makefile.cocotb \
 		SIM_BUILD=build/cocotb-rtl \
 		COCOTB_RESULTS_FILE=$(abspath build/cocotb-rtl/results.xml) \
@@ -119,6 +135,7 @@ test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) Makefile.cocotb dv/cocotb_benches/topmo
 		COCOTB_TEST_MODULES=dv.cocotb_benches.topmod_tb0
 
 unit-test: $(UNIT_TEST_MANIFEST) misc/unit-test.py Makefile.cocotb
+	$(check_simulation_config)
 	$(PYTHON) misc/unit-test.py --manifest $(UNIT_TEST_MANIFEST) --rtl-dir build/rtl
 
 $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
@@ -127,6 +144,13 @@ $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) synth/yosys_generic/yosys.tcl
 		-l build/yosys/yosys.log
 
 synth yosys: $(YOSYS_NETLIST)
+
+orfs:
+	@$(PYTHON) -c 'import json, sys; sys.exit(0 if json.load(open("rtl/config.json")).get("RENDER_OPTION", {}).get("SYNTH") is True else "error: make orfs requires RENDER_OPTION.SYNTH=true")'
+	@test -x "$(ORFS_HOME)/flow/util/docker_shell" || { echo "error: set ORFS_HOME to an OpenROAD-flow-scripts checkout" >&2; exit 1; }
+	$(MAKE) prepare
+	OR_IMAGE=$(ORFS_IMAGE) "$(ORFS_HOME)/flow/util/docker_shell" -- \
+		make DESIGN_CONFIG=$(ORFS_DESIGN_CONFIG) QT_QPA_PLATFORM=$(QT_QPA_PLATFORM) $(DEFAULT_GOAL)
 
 test-gls: $(YOSYS_NETLIST) Makefile.cocotb dv/cocotb_benches/topmod_tb0.py
 	$(MAKE) -f Makefile.cocotb \
@@ -207,7 +231,7 @@ check: doctor lint unit-test test test-cocotb synth test-gls icebreaker-bitstrea
 	test-icebreaker-gls check-vivado-sources
 
 clean:
-	rm -rf build synth/vivado_basys3/build _rtl sim_build \
+	rm -rf build openroad/output synth/vivado_basys3/build _rtl sim_build \
 		top_module_tb_sim_dir top_module_tb_gls_dir top_module_gls_dir \
 		__pycache__ misc/__pycache__ dv/cocotb_benches/__pycache__ \
 		dv/ICE_cocotb_benches/__pycache__

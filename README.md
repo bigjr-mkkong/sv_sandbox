@@ -1,13 +1,15 @@
-# SystemVerilog FPGA Template
+# SystemVerilog / cocotb Template
 
-This repository is a small, complete SystemVerilog flow built around OSS CAD
-Suite. The example design continuously transmits `A` through `Z` at 115200 baud
-and includes RTL simulation, cocotb, generic Yosys synthesis, generic
+This simulation-first template provides rendered SystemVerilog, cocotb unit
+tests, and end-to-end verification. The default design continuously transmits
+`A` through `Z` at 115200 baud. It also includes generic Yosys synthesis, generic
 post-synthesis simulation, and an iCEBreaker bitstream flow. A Vivado target is
-provided for the Basys 3.
+provided for the Basys 3. An optional Docker-backed OpenROAD flow implements
+the same default design using Nangate45; it is not required for simulation.
 
 All generated files go under `build/` (except Vivado's project under
-`synth/vivado_basys3/build/`). Running `make` only prints help; it does not render
+`synth/vivado_basys3/build/` and OpenROAD outputs under `openroad/output/`).
+Running `make` only prints help; it does not render
 or delete files as a side effect.
 
 ## Requirements
@@ -32,6 +34,9 @@ make doctor
 ```
 
 `make setup` creates `venv/` and installs the packages in `requirements.txt`.
+It prefers the Python selected by pyenv, falling back to `python3`; override
+with `VENV_PYTHON=/path/to/python3`. The virtualenv takes precedence over the
+OSS CAD Suite Python tools so the pinned cocotb version is used consistently.
 
 ## Common workflow
 
@@ -47,7 +52,7 @@ make test
 make test-cocotb
 
 # Run every unit test registered by an RTL template
-make unit_test
+make unit-test
 
 # Build and test a generic Yosys post-synthesis netlist
 make synth
@@ -79,9 +84,10 @@ An RTL template can register a module-level test with Jinja's `do` extension:
 
 ```jinja
 {% do unit_test(
-    module_name = "simple_cache_1rw",
+    module_name = "main_module",
     test_framework = "cocotb",
-    test_path = "dv/cocotb_benches/1rw_simple_cache_tb.py") %}
+    test_path = "dv/cocotb_benches/main_module_tb.py",
+    use_wrapper = true) %}
 ```
 
 `module_name` is the rendered SystemVerilog module to use as the DUT,
@@ -92,19 +98,50 @@ collects these declarations and writes `build/.unit-test.json`:
 ```json
 [
   {
-    "module_name": "simple_cache_1rw",
+    "module_name": "main_module",
     "test_framework": "cocotb",
-    "test_path": "dv/cocotb_benches/1rw_simple_cache_tb.py"
+    "test_path": "dv/cocotb_benches/main_module_tb.py",
+    "use_wrapper": true,
+    "rtl_dependencies": []
   }
 ]
 ```
 
-Rendering only records metadata; it never executes tests. `make unit_test`
+Rendering only records metadata; it never executes tests. `make unit-test`
 invokes `misc/unit-test.py`, locates each DUT in the rendered RTL tree, and runs
 the registered test through the existing cocotb make flow. Each module gets an
 independent directory under `build/unit-test/`. The command uses the Python
 environment created by `make setup`, so no manual virtual-environment activation
 is required.
+
+With `use_wrapper=true`, the runner compiles all SystemVerilog/Verilog files
+under `dv/cocotb_wrappers/` and selects `<module_name>_unit_test` as the simulation
+top. Wrappers are handwritten adapters for interfaces, enums, arrays, or test
+signals; their filenames need not match the DUT. Without a wrapper, the top is
+the registered module itself. Every registered module runs in a separate
+simulation; compiling multiple wrappers does not execute their tests together.
+The runner stops on the first failed module.
+
+The canonical `rtl/rtl.flist` provides common sources in their declared order.
+Optional `rtl_dependencies=["helper.sv"]` entries add files from the rendered
+RTL tree. Registration may be inside Jinja conditions, so only enabled tests
+enter the manifest. Results and traces live in `build/unit-test/<module>/`.
+
+The included alphabet-generator unit test checks wraparound and backpressure.
+`dv/cocotb_benches/handshake.py` provides a passive `monitor_handshakes()` coroutine
+that counts accepted/stalled cycles and asserts that valid and payload remain
+stable until acceptance. Start it after reset, drive inputs away from the
+sampling edge, and use it only on channels with this stable-payload contract.
+
+For Verilator, C++ sources placed in `cpp/*.cpp` are automatically compiled and
+tracked as build dependencies, allowing DPI models without changing the make
+recipe. No cache-specific memory model is included.
+
+Run the lightweight renderer/runner checks with:
+
+```bash
+venv/bin/python3 -m unittest discover -s misc -p 'test_*.py'
+```
 
 ## Configuration and source files
 
@@ -113,6 +150,7 @@ module integrations:
 
 ```json
 {
+  "RENDER_OPTION": {"SYNTH": false},
   "UART0": {
     "ENABLE": true,
     "module_name": "taxi_uart",
@@ -123,16 +161,29 @@ module integrations:
 }
 ```
 
-Every top-level object represents one configurable external module instance and
-must have an `ENABLE` Boolean (`true` or `false`) and a `module_name` matching
-the SystemVerilog module declaration to instantiate. The top-level object may
-also be empty; integrations omitted from it are treated as disabled by their
-template guards. The template currently has
+The renderer accepts any JSON object without enforcing a project-specific
+schema. Extra fields, including unused or misspelled fields, are accepted;
+accessing an undefined field in a template fails through Jinja `StrictUndefined`.
+`ENABLE` and `module_name` are integration conventions, not renderer requirements.
+The template currently has
 one such instance, `UART0`, linked to Taxi's `taxi_uart` module. Jinja resolves
 this choice during `make prepare`, before Verilator or Yosys reads the RTL. With
 `UART0.ENABLE` set to `false`, the rendered `top_module` contains no UART
 instance and holds `txd_o` high. The supplied UART tests expect the example
 module to be enabled.
+
+Keep `RENDER_OPTION.SYNTH=false` for `make unit-test` and `make test-cocotb`;
+both refuse to run with synthesis mode enabled. `make orfs` requires it to be
+`true`. The flag is available to templates for simulation-only assertions or
+different simulation/synthesis implementations:
+
+```jinja
+{% if not RENDER_OPTION.SYNTH %}
+// Simulation-only assertions belong here.
+{% endif %}
+```
+
+The default UART design does not need different hardware in the two modes.
 
 ### Finding configuration fields: a beginner's guide
 
@@ -187,8 +238,8 @@ and `module_name` fields, add a matching conditional integration block that
 uses the JSON fields directly, and add all required source files to
 `rtl/rtl.flist`. Do not route those fields through `config_pkg.sv`. The selected
 module must provide the ports and parameters used by that integration block.
-The renderer validates every module link and reports missing enabled-UART
-configuration fields through Jinja's strict template evaluation.
+Missing template fields are reported through Jinja's strict evaluation;
+Verilator or Yosys validates the rendered module connections.
 
 [`rtl/rtl.flist`](rtl/rtl.flist) is the single source manifest for project and
 third-party RTL. Files under `rtl/` are Jinja templates rendered into
@@ -199,6 +250,41 @@ The renderer is dependency-driven. `make` reruns it only when a template, the
 manifest, the JSON configuration, or the renderer changes. Yosys reads the
 rendered SystemVerilog through its Slang frontend, so no `sv2v` conversion or
 generated third-party file list is needed.
+
+## Optional OpenROAD flow
+
+Install Docker, obtain an ORFS image, and set `ORFS_HOME` to an
+OpenROAD-flow-scripts checkout containing `flow/util/docker_shell`. The defaults
+are a sibling `../OpenROAD-flow-scripts` checkout and `openroad/orfs:latest`.
+Use a fixed image tag for reproducible runs. No OpenROAD tools need to be
+installed in the simulation virtualenv.
+
+Set `RENDER_OPTION.SYNTH=true` in `rtl/config.json`, then run from the project root:
+
+```bash
+make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
+    ORFS_IMAGE=openroad/orfs:latest DEFAULT_GOAL=floorplan
+
+# Run the complete flow; all is the default.
+make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
+    ORFS_IMAGE=openroad/orfs:latest DEFAULT_GOAL=all
+```
+
+Available stopping goals are `synth`, `floorplan`, `place`, `cts`, `route`,
+`finish`, and `all`. `openroad/config.mk` reuses the rendered canonical source
+list, with no cache-specific sources or SRAM placement. `openroad/top_module.sdc`
+provides the example's 48 MHz clock and illustrative I/O budgets; review them
+when replacing the design. Override `ORFS_DESIGN_CONFIG` with a container-visible
+path if using another design configuration.
+
+Reporting defaults to `QT_QPA_PLATFORM=offscreen`, including over SSH. For
+interactive inspection with a working X display, use
+`DEFAULT_GOAL=gui_floorplan QT_QPA_PLATFORM=xcb`. GUI access still requires valid
+display authorization. Generated logs, objects, reports, and results stay under
+`openroad/output/`, which is ignored by Git and removed by `make clean`.
+
+Switch `RENDER_OPTION.SYNTH` back to `false` before running cocotb again.
+OpenROAD is deliberately not part of `make check`.
 
 ## FPGA targets
 
@@ -247,9 +333,11 @@ venv/bin/python3 read-uart.py --port /dev/ttyUSB0 --baud 115200
 
 - `rtl/`: Jinja-rendered project RTL, configuration, and the canonical manifest
 - `dv/`: SystemVerilog and cocotb tests
+- `dv/cocotb_wrappers/`: optional unit-test adapters
 - `lint/`: Verilator lint configuration
 - `misc/rtl_renderer.py`: RTL rendering engine used by `prepare.sh`
 - `misc/unit-test.py`: runner for unit tests registered by RTL templates
+- `openroad/`: optional ORFS configuration and timing constraints
 - `synth/yosys_generic/`: generic netlist synthesis
 - `synth/icestorm_icebreaker/`: iCEBreaker wrapper, constraints, synthesis, P&R
 - `synth/vivado_basys3/`: Basys 3 wrapper, constraints, and Vivado batch flow

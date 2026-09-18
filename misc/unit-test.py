@@ -26,7 +26,7 @@ def project_path(project_root: Path, path: Path) -> Path:
     return path.resolve() if path.is_absolute() else (project_root / path).resolve()
 
 
-def load_manifest(manifest_path: Path) -> list[dict[str, str]]:
+def load_manifest(manifest_path: Path) -> list[dict[str, object]]:
     """Load and validate the renderer-generated unit-test manifest."""
     if not manifest_path.is_file():
         raise UnitTestError(
@@ -41,9 +41,14 @@ def load_manifest(manifest_path: Path) -> list[dict[str, str]]:
     if not isinstance(manifest, list):
         raise UnitTestError("unit-test manifest must contain a JSON list")
 
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, object]] = []
     seen_modules: set[str] = set()
-    required_fields = {"module_name", "test_framework", "test_path"}
+    required_fields = {
+        "module_name",
+        "test_framework",
+        "test_path",
+        "use_wrapper",
+    }
     for index, raw_entry in enumerate(manifest):
         if not isinstance(raw_entry, dict):
             raise UnitTestError(f"unit-test entry {index} must be a JSON object")
@@ -53,11 +58,26 @@ def load_manifest(manifest_path: Path) -> list[dict[str, str]]:
             raise UnitTestError(f"unit-test entry {index} is missing: {missing}")
 
         entry = {field: raw_entry[field] for field in required_fields}
-        if not all(isinstance(value, str) for value in entry.values()):
+        rtl_dependencies = raw_entry.get("rtl_dependencies", [])
+        string_fields = ("module_name", "test_framework", "test_path")
+        if not all(isinstance(entry[field], str) for field in string_fields):
             raise UnitTestError(
-                f"all fields in unit-test entry {index} must be strings"
+                f"module_name, test_framework, and test_path in unit-test entry "
+                f"{index} must be strings"
             )
-        module_name = entry["module_name"]
+        if not isinstance(entry["use_wrapper"], bool):
+            raise UnitTestError(
+                f"use_wrapper in unit-test entry {index} must be true or false"
+            )
+        if not isinstance(rtl_dependencies, list) or not all(
+            isinstance(path, str) and path.strip() for path in rtl_dependencies
+        ):
+            raise UnitTestError(
+                f"rtl_dependencies in unit-test entry {index} must be a list "
+                "of non-empty paths"
+            )
+        entry["rtl_dependencies"] = rtl_dependencies
+        module_name = str(entry["module_name"])
         if not SV_IDENTIFIER.fullmatch(module_name):
             raise UnitTestError(
                 f"invalid SystemVerilog module name in entry {index}: {module_name}"
@@ -83,6 +103,58 @@ def index_rendered_modules(rtl_dir: Path) -> dict[str, list[Path]]:
         for module_name in MODULE_DECLARATION.findall(source):
             module_sources.setdefault(module_name, []).append(source_path)
     return module_sources
+
+
+def load_rtl_filelist(
+    project_root: Path, rtl_dir: Path, filelist_path: Path
+) -> list[Path]:
+    """Load the canonical RTL sources, mapping templates to rendered files."""
+    if not filelist_path.is_file():
+        raise UnitTestError(f"RTL file list not found: {filelist_path}")
+
+    source_paths: list[Path] = []
+    for line_number, raw_line in enumerate(
+        filelist_path.read_text(encoding="utf-8").splitlines(), start=1
+    ):
+        line = raw_line.split("//", maxsplit=1)[0].strip()
+        if not line:
+            continue
+
+        try:
+            fields = shlex.split(line)
+        except ValueError as error:
+            raise UnitTestError(
+                f"invalid entry in {filelist_path}:{line_number}: {error}"
+            ) from error
+        if len(fields) != 1:
+            raise UnitTestError(
+                f"expected one RTL path in {filelist_path}:{line_number}"
+            )
+
+        listed_path = Path(fields[0])
+        if listed_path.is_absolute():
+            source_path = listed_path.resolve()
+        elif listed_path.parts[:1] == ("rtl",):
+            source_path = (rtl_dir / Path(*listed_path.parts[1:])).resolve()
+        else:
+            source_path = (project_root / listed_path).resolve()
+
+        if source_path.suffix not in RTL_SUFFIXES:
+            raise UnitTestError(
+                f"unsupported RTL source in {filelist_path}:{line_number}: "
+                f"{listed_path}"
+            )
+        if not source_path.is_file():
+            raise UnitTestError(
+                f"RTL source in {filelist_path}:{line_number} was not found: "
+                f"{source_path}"
+            )
+        if source_path not in source_paths:
+            source_paths.append(source_path)
+
+    if not source_paths:
+        raise UnitTestError(f"RTL file list contains no sources: {filelist_path}")
+    return source_paths
 
 
 def find_module_source(
@@ -132,13 +204,38 @@ def run_cocotb_test(
     makefile: Path,
     manifest_path: Path,
     source_path: Path,
+    dependency_paths: list[Path],
+    common_sources: list[Path],
     module_name: str,
     test_path: str,
+    use_wrapper: bool,
     simulator: str,
     build_root: Path,
 ) -> int:
     """Invoke the existing cocotb make flow for one registered module."""
     test_module, test_file = cocotb_test_module(project_root, test_path)
+    top_module = module_name
+    source_paths = list(
+        dict.fromkeys([*common_sources, *dependency_paths, source_path])
+    )
+    compile_dependencies = [test_file, manifest_path, *dependency_paths]
+    if use_wrapper:
+        wrapper_dir = project_root / "dv" / "cocotb_wrappers"
+        if not wrapper_dir.is_dir():
+            raise UnitTestError(f"cocotb wrapper directory not found: {wrapper_dir}")
+        wrapper_paths = sorted(
+            path
+            for path in wrapper_dir.rglob("*")
+            if path.is_file() and path.suffix in RTL_SUFFIXES
+        )
+        if not wrapper_paths:
+            raise UnitTestError(
+                f"no RTL sources found in cocotb wrapper directory: {wrapper_dir}"
+            )
+        top_module = f"{module_name}_unit_test"
+        source_paths.extend(wrapper_paths)
+        compile_dependencies.extend(wrapper_paths)
+
     safe_module_name = re.sub(r"[^A-Za-z0-9_.-]", "_", module_name)
     sim_build = build_root / safe_module_name
     results_file = sim_build / "results.xml"
@@ -151,10 +248,11 @@ def run_cocotb_test(
         f"SIM={simulator}",
         f"SIM_BUILD={sim_build}",
         f"COCOTB_RESULTS_FILE={results_file}",
-        f"CUSTOM_COMPILE_DEPS={test_file} {manifest_path}",
+        "CUSTOM_COMPILE_DEPS="
+        + " ".join(str(path) for path in compile_dependencies),
         f"USER_SIM_ARGS=--trace-file {trace_file}",
-        f"VERILOG_SOURCES={source_path}",
-        f"COCOTB_TOPLEVEL={module_name}",
+        "VERILOG_SOURCES=" + " ".join(str(path) for path in source_paths),
+        f"COCOTB_TOPLEVEL={top_module}",
         f"COCOTB_TEST_MODULES={test_module}",
     ]
 
@@ -169,6 +267,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=Path("build/.unit-test.json"))
     parser.add_argument("--rtl-dir", type=Path, default=Path("build/rtl"))
+    parser.add_argument("--rtl-flist", type=Path, default=Path("rtl/rtl.flist"))
     parser.add_argument("--build-dir", type=Path, default=Path("build/unit-test"))
     parser.add_argument("--cocotb-makefile", type=Path, default=Path("Makefile.cocotb"))
     parser.add_argument("--sim", default="verilator")
@@ -176,6 +275,7 @@ def main() -> int:
 
     manifest_path = project_path(project_root, args.manifest)
     rtl_dir = project_path(project_root, args.rtl_dir)
+    rtl_flist = project_path(project_root, args.rtl_flist)
     build_root = project_path(project_root, args.build_dir)
     makefile = project_path(project_root, args.cocotb_makefile)
 
@@ -185,16 +285,34 @@ def main() -> int:
             print("No RTL unit tests are registered.")
             return 0
         module_sources = index_rendered_modules(rtl_dir)
+        common_sources = load_rtl_filelist(project_root, rtl_dir, rtl_flist)
     except UnitTestError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    failures: list[str] = []
     for entry in entries:
-        module_name = entry["module_name"]
-        framework = entry["test_framework"]
+        module_name = str(entry["module_name"])
+        framework = str(entry["test_framework"])
         try:
             source_path = find_module_source(module_sources, module_name)
+            dependency_paths = []
+            for dependency in entry["rtl_dependencies"]:
+                relative_dependency = Path(str(dependency))
+                if relative_dependency.parts[:1] == ("rtl",):
+                    relative_dependency = Path(*relative_dependency.parts[1:])
+                dependency_path = (rtl_dir / relative_dependency).resolve()
+                try:
+                    dependency_path.relative_to(rtl_dir)
+                except ValueError as error:
+                    raise UnitTestError(
+                        f"RTL dependency escapes rendered tree: {dependency}"
+                    ) from error
+                if not dependency_path.is_file():
+                    raise UnitTestError(
+                        f"RTL dependency not found for {module_name}: "
+                        f"{dependency_path}"
+                    )
+                dependency_paths.append(dependency_path)
             if framework != "cocotb":
                 raise UnitTestError(
                     f"unsupported test framework for {module_name}: {framework}"
@@ -204,22 +322,23 @@ def main() -> int:
                 makefile=makefile,
                 manifest_path=manifest_path,
                 source_path=source_path,
+                dependency_paths=dependency_paths,
+                common_sources=common_sources,
                 module_name=module_name,
-                test_path=entry["test_path"],
+                test_path=str(entry["test_path"]),
+                use_wrapper=bool(entry["use_wrapper"]),
                 simulator=args.sim,
                 build_root=build_root,
             )
             if return_code:
-                failures.append(module_name)
+                print(f"\nUnit test failed: {module_name}", file=sys.stderr)
+                return 1
         except UnitTestError as error:
             print(f"error: {error}", file=sys.stderr)
-            failures.append(module_name)
+            print(f"Unit test failed: {module_name}", file=sys.stderr)
+            return 1
 
-    if failures:
-        print(f"\nUnit tests failed: {', '.join(failures)}", file=sys.stderr)
-        return 1
-
-    print(f"\nAll {len(entries)} RTL unit test(s) passed.")
+    print(f"\nAll {len(entries)} RTL unit test(s) passed ;)")
     return 0
 
 

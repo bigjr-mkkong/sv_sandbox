@@ -8,3 +8,5 @@ __pycache__
 build
 venv/
 .rtl_flist.tmp
+results.xml
+/openroad/output/

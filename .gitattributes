@@ -6,3 +6,7 @@
 # Verilator
 *.vlt   linguist-language=SystemVerilog
 *.f     linguist-language=SystemVerilog
+
+*.webp binary
+*.png  binary
+*.jpg  binary
