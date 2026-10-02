@@ -9,3 +9,4 @@ third_party/taxi/src/lss/rtl/taxi_uart.sv
 rtl/config_pkg.sv
 rtl/main_module.sv
 rtl/top_module.sv
+rtl/dual_port_ram.sv
