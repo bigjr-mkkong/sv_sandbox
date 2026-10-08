@@ -109,7 +109,7 @@ prepare: $(RTL_STAMP) $(UNIT_TEST_MANIFEST)
 lint: $(RTL_STAMP) $(RTL_SOURCES) lint/verilator.vlt
 	verilator lint/verilator.vlt --lint-only --Wall --top-module $(TOP) $(RTL_SOURCES)
 
-$(SIM_BINARY): $(RTL_STAMP) $(RTL_SOURCES) $(DV_SOURCES) dv/dv.flist lint/verilator.vlt
+$(SIM_BINARY): $(RTL_STAMP) $(RTL_SOURCES) $(DV_SOURCES) $(wildcard cpp/*.cpp) dv/dv.flist lint/verilator.vlt
 	@mkdir -p $(SIM_DIR)
 	verilator lint/verilator.vlt --Mdir $(SIM_DIR) --binary --top-module $(TOP_TB) \
 		$(RTL_SOURCES) -f dv/dv.flist -o V$(TOP_TB)

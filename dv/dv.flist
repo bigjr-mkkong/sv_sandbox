@@ -1,6 +1,7 @@
 dv/dv_pkg.sv
 dv/top_module_runner.sv
 dv/top_module_tb.sv
+cpp/ideal_mem.cpp
 
 --timing
 -j 0

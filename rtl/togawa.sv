@@ -3,6 +3,7 @@
 {% do unit_test(
     module_name = "togawa_pipeline",
     test_framework = "cocotb",
+    use_wrapper = true,
     test_path = "dv/cocotb_benches/togawa_tb.py") %}
 module togawa_pipeline (
     input  logic        clk_i,

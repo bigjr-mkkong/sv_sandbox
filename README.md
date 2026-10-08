@@ -133,9 +133,32 @@ that counts accepted/stalled cycles and asserts that valid and payload remain
 stable until acceptance. Start it after reset, drive inputs away from the
 sampling edge, and use it only on channels with this stable-payload contract.
 
-For Verilator, C++ sources placed in `cpp/*.cpp` are automatically compiled and
-tracked as build dependencies, allowing DPI models without changing the make
-recipe. No cache-specific memory model is included.
+For cocotb with Verilator, C++ sources placed in `cpp/*.cpp` are automatically
+compiled and tracked as build dependencies. The SystemVerilog simulation
+includes `cpp/ideal_mem.cpp` through `dv/dv.flist`.
+
+The ideal memory model originated in `cache-example` and stores 16-bit words.
+Its DPI functions are
+`ideal_mem_create`, `ideal_mem_destroy`, `ideal_mem_reset`, `ideal_mem_write`,
+and `ideal_mem_read`. Each `chandle` owns an independent memory. Read/write
+use an `int unsigned` byte address and a `bit [15:0]` word; addresses
+are rounded down to a two-byte boundary, unwritten words read as zero, and
+reset clears stored lines. See the DPI declarations and assertions in
+[`dv/top_module_tb.sv`](dv/top_module_tb.sv); `make test` runs these checks.
+
+The TOGAWA unit test uses [`dv/cocotb_wrappers/togawa_pipeline.sv`](dv/cocotb_wrappers/togawa_pipeline.sv),
+which contains the pipeline and two independent ideal-memory handles for
+instruction and data SRAM. `run_i=0` holds the pipeline in reset while
+`mem_write_i`, `mem_icache_i`, `mem_addr_i`, and `mem_data_i` preload words.
+Program word PC `n` is loaded at instruction byte address `2*n`.
+`mem_read_i` reads either SRAM into `mem_read_data_o` on a rising edge.
+`rst_ni=0` clears both SRAMs. The cocotb test preloads the program, sets
+`run_i=1`, and clocks the wrapper to HALT with all SRAM enables asserted.
+`make unit-test` checks seven directed cases: HALT, WA, TOGA, TOGA followed by
+WA, two TOGAs, TOGA/WA/WA/TOGA/WA, and a 16-bit increment program including
+carry propagation and overflow. All instruction fetches, data reads, and
+data writes use the C++ memory; the bench checks registers, branch PCs,
+accepted data requests, and SRAM readback.
 
 ## Configuration and source files
 
