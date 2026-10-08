@@ -11,3 +11,4 @@ venv/
 results.xml
 /openroad/output/
 /dv/cocotb_benches/traces
+/rtl/architecture.md
