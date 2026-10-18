@@ -154,11 +154,36 @@ Program word PC `n` is loaded at instruction byte address `2*n`.
 `mem_read_i` reads either SRAM into `mem_read_data_o` on a rising edge.
 `rst_ni=0` clears both SRAMs. The cocotb test preloads the program, sets
 `run_i=1`, and clocks the wrapper to HALT with all SRAM enables asserted.
-`make unit-test` checks seven directed cases: HALT, WA, TOGA, TOGA followed by
-WA, two TOGAs, TOGA/WA/WA/TOGA/WA, and a 16-bit increment program including
-carry propagation and overflow. All instruction fetches, data reads, and
-data writes use the C++ memory; the bench checks registers, branch PCs,
-accepted data requests, and SRAM readback.
+`make unit-test` checks eight directed cases: HALT, WA, TOGA, TOGA followed by
+WA, two TOGAs, a negative jump offset, TOGA/WA/WA/TOGA/WA, and a 16-bit
+increment program including carry propagation and overflow. All instruction
+fetches, data reads, and data writes use the C++ memory; the bench checks
+registers, branch PCs, accepted data requests, and SRAM readback.
+
+`sram_blk` in [`rtl/cache.sv`](rtl/cache.sv) wraps BSG SRAM with valid/ready
+requests and responses and stores only instruction data. `iram_blk` tracks
+one window start and valid bit. A PC hits when its 16-bit distance from the
+window start is less than sixteen; the distance also indexes SRAM. Misses
+request SPI directly, fill PC through PC+15, then mark the window valid,
+read the original requested word, and respond through `RESP_PIPELINE`.
+Hits remain valid until accepted; changing `pc_i`
+suppresses an old response. A redirect during refill completes that fill
+before looking up the new PC.
+
+Connect `req_val_i`, `pc_i`, and `rsp_rdy_i` to the pipeline's instruction
+request valid, PC, and response ready; connect `req_rdy_o`, `rsp_val_o`, and
+`inst_o` back to its request ready, instruction valid, and instruction data.
+The SPI side connects `iram_val_o`/`iram_new_pc_o` to `req_val`/`req_addr`,
+with `req_we=0` and `req_wdata=0`; connect the master's `req_rdy`, `resp_val`,
+and `resp_rdata` to `spi_rdy_i`, `spi_val_i`, and `spi_data_i`.
+PCs stay word indexed inside IRAM; SPI uses 16-bit byte addresses
+(`(2*PC + byte_offset) & 0xFFFF`). The physical memory holds 32768 instructions;
+word PCs differing by 0x8000 access the same SPI locations. Instructions are
+little endian, using two byte reads. The SPI master sends a command byte,
+16 address bits, and one data byte, for a 32-bit frame.
+`make unit-test` also checks IRAM with the actual SPI master and a simulated
+SPI slave, covering refills, hits, window boundaries, high addresses, wraparound,
+backpressure, redirects, and reset during a frame.
 
 ## Configuration and source files
 

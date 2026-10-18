@@ -1,6 +1,17 @@
 SIM ?= verilator
 TOPLEVEL_LANG ?= verilog
 
+ifeq ($(COCOTB_TOPLEVEL),iram_blk_unit_test)
+VERILOG_INCLUDE_DIRS += third_party/basejump_stl/bsg_misc
+override VERILOG_SOURCES += \
+	third_party/basejump_stl/bsg_misc/bsg_dff.sv \
+	third_party/basejump_stl/bsg_misc/bsg_dff_en.sv \
+	third_party/basejump_stl/bsg_misc/bsg_dff_en_bypass.sv \
+	third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync_synth.sv \
+	third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync.sv
+override CUSTOM_COMPILE_DEPS += third_party/basejump_stl/bsg_misc/bsg_defines.sv
+endif
+
 ifeq ($(SIM),verilator)
 PROJECT_CPP_SOURCES := $(sort $(wildcard $(dir $(abspath $(lastword $(MAKEFILE_LIST))))cpp/*.cpp))
 override VERILOG_SOURCES += $(PROJECT_CPP_SOURCES)

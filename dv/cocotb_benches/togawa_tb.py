@@ -130,6 +130,18 @@ async def two_togas(dut):
 
 
 @cocotb.test(timeout_time=10, timeout_unit="us")
+async def negative_jump_offset(dut):
+    # PC 2 branches to 2 + 1 - 2 = 1, flushing the following HALT.
+    # The second iteration sets bit 0, so it falls through and halts.
+    program = {0: wa(0x20), 1: toga(1, 0), 2: toga(0, -2)}
+    assert await execute(dut, program, {0x20: 1}) == [
+        (0, 0x20, None), (1, 0x20, 1)]
+    assert int(dut.pipeline.reg_q.value) == 1
+    assert int(dut.pc_o.value) == 4
+    assert await memory_access(dut, instruction=False, address=0x20) == 1
+
+
+@cocotb.test(timeout_time=10, timeout_unit="us")
 async def toga_wa_wa_toga_wa(dut):
     program = {0: toga(2, 0), 1: wa(0x20), 2: wa(0x22),
                3: toga(3, 0), 4: wa(0x24)}
