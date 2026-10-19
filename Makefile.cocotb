@@ -16,12 +16,13 @@ ifeq ($(SIM),verilator)
 PROJECT_CPP_SOURCES := $(sort $(wildcard $(dir $(abspath $(lastword $(MAKEFILE_LIST))))cpp/*.cpp))
 override VERILOG_SOURCES += $(PROJECT_CPP_SOURCES)
 override CUSTOM_COMPILE_DEPS += $(PROJECT_CPP_SOURCES)
+SIM_ARGS += +verilator+coverage+file+$(abspath $(SIM_BUILD))/coverage.dat
 endif
 
 COMPILE_ARGS += -Wno-fatal
 COMPILE_ARGS += -CFLAGS -std=c++17
 COMPILE_ARGS += $(USER_COMPILE_ARGS)
-EXTRA_ARGS += --trace --trace-structs
+EXTRA_ARGS += --trace --trace-structs --coverage
 SIM_ARGS += $(USER_SIM_ARGS)
 
 include $(shell cocotb-config --makefiles)/Makefile.sim

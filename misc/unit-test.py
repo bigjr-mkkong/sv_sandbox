@@ -240,6 +240,8 @@ def run_cocotb_test(
     sim_build = build_root / safe_module_name
     results_file = sim_build / "results.xml"
     trace_file = sim_build / "dump.vcd"
+    if simulator == "verilator":
+        (sim_build / "coverage.dat").unlink(missing_ok=True)
 
     command = [
         "make",
@@ -290,6 +292,7 @@ def main() -> int:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
+    coverage_files = []
     for entry in entries:
         module_name = str(entry["module_name"])
         framework = str(entry["test_framework"])
@@ -333,10 +336,69 @@ def main() -> int:
             if return_code:
                 print(f"\nUnit test failed: {module_name}", file=sys.stderr)
                 return 1
+            if args.sim == "verilator":
+                safe_module_name = re.sub(r"[^A-Za-z0-9_.-]", "_", module_name)
+                coverage_file = build_root / safe_module_name / "coverage.dat"
+                if not coverage_file.is_file():
+                    raise UnitTestError(f"Verilator coverage file not generated: {coverage_file}")
+                coverage_files.append(coverage_file)
         except UnitTestError as error:
             print(f"error: {error}", file=sys.stderr)
             print(f"Unit test failed: {module_name}", file=sys.stderr)
             return 1
+
+    if coverage_files:
+        coverage_dir = build_root / "coverage"
+        coverage_dir.mkdir(parents=True, exist_ok=True)
+        merged_file = coverage_dir / "merged.dat"
+        annotated_dir = coverage_dir / "annotated"
+        if annotated_dir.is_dir():
+            for old_report in annotated_dir.rglob("*"):
+                if old_report.is_file():
+                    old_report.unlink()
+        try:
+            subprocess.run([
+                "verilator_coverage", "--write", str(merged_file),
+                *(str(path) for path in coverage_files),
+            ], check=True)
+            # Verilator uses basenames for annotations; separate source directories
+            # so identically named RTL and wrapper files cannot overwrite each other.
+            source_groups: dict[Path, list[str]] = {}
+            for line in merged_file.read_text(encoding="utf-8").splitlines():
+                filename = re.search("\x01f\x02([^\x01]+)", line)
+                if filename:
+                    source_dir = project_path(project_root, Path(filename[1])).parent
+                    relative_dir = Path(source_dir.relative_to(project_root))
+                    source_groups.setdefault(relative_dir, []).append(line)
+            for relative_dir, records in sorted(source_groups.items()):
+                group_file = coverage_dir / "sources" / relative_dir / "coverage.dat"
+                group_file.parent.mkdir(parents=True, exist_ok=True)
+                group_file.write_text(
+                    "# SystemC::Coverage-3\n" + "\n".join(records) + "\n",
+                    encoding="utf-8",
+                )
+                (annotated_dir / relative_dir).mkdir(parents=True, exist_ok=True)
+                subprocess.run([
+                    "verilator_coverage", "--annotate", str(annotated_dir / relative_dir),
+                    "--annotate-all", "--annotate-min", "1", "--annotate-points",
+                    str(group_file),
+                ], check=True)
+        except (OSError, subprocess.CalledProcessError) as error:
+            print(f"error: coverage report generation failed: {error}", file=sys.stderr)
+            return 1
+        index_file = coverage_dir / "index.md"
+        index_file.write_text(
+            "# Unit-test coverage\n\n"
+            "Merged coverage from all modules in this run. "
+            "Rows starting with `-000000` mark uncovered points.\n\n"
+            + "\n".join(
+                f"- [{path.relative_to(annotated_dir)}]({path})"
+                for path in sorted(annotated_dir.rglob("*"))
+                if path.is_file()
+            ) + "\n",
+            encoding="utf-8",
+        )
+        print(f"\n[unit-test] Annotated coverage: {index_file}", flush=True)
 
     print(f"\nAll {len(entries)} RTL unit test(s) passed ;)")
     return 0

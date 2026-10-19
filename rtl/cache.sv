@@ -61,22 +61,15 @@ module sram_blk #(
 
         case (state_q)
             IDLE: begin
-                req_rdy_o = rst_ni;
+                req_rdy_o = 1;
                 if (req_val_i && req_rdy_o)
                     state_d = RESP;
             end
 
             RESP: begin
-                req_rdy_o = rst_ni && rsp_rdy_i;
-                rsp_val_o = rst_ni;
-                if (req_val_i && req_rdy_o)
-                    state_d = RESP;
-                else if (rsp_val_o && rsp_rdy_i)
+                rsp_val_o = 1;
+                if (rsp_val_o && rsp_rdy_i)
                     state_d = IDLE;
-            end
-
-            default: begin
-                state_d = IDLE;
             end
         endcase
     end
@@ -250,7 +243,6 @@ module iram_blk #(
                     end
                 end
 
-                default: state_d = IDLE;
             endcase
         end
     end
