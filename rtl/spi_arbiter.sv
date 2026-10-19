@@ -19,20 +19,23 @@ module two2one_spi_arbiter (
     typedef enum logic [1:0] { IDLE, WAIT, RESP } state_e;
     state_e state_d, state_q;
 
-    // Interface array indices must be constant; mux the selected request.
-    assign mst_o.req_val = rst_ni && state_q == IDLE
-        && (curr_idx_q ? slvs_i[1].req_val : slvs_i[0].req_val);
-    assign mst_o.req_we = curr_idx_q ? slvs_i[1].req_we : slvs_i[0].req_we;
-    assign mst_o.req_addr = curr_idx_q ? slvs_i[1].req_addr : slvs_i[0].req_addr;
-    assign mst_o.req_wdata = curr_idx_q ? slvs_i[1].req_wdata : slvs_i[0].req_wdata;
+    logic [1:0] req_val, req_we, rsp_rdy;
+    logic [1:0][15:0] req_addr;
+    logic [1:0][7:0] req_wdata;
 
-    // spi_master has no response-ready port: capture its pulse unconditionally in WAIT.
-    assign mst_o.rsp_rdy = rst_ni && state_q == WAIT;
+    assign mst_o.req_we = req_we[curr_idx_q];
+    assign mst_o.req_addr = req_addr[curr_idx_q];
+    assign mst_o.req_wdata = req_wdata[curr_idx_q];
 
     for (genvar i = 0; i < 2; i++) begin : source_ports
-        assign slvs_i[i].req_rdy = rst_ni && state_q == IDLE
+        assign req_val[i] = slvs_i[i].req_val;
+        assign req_we[i] = slvs_i[i].req_we;
+        assign req_addr[i] = slvs_i[i].req_addr;
+        assign req_wdata[i] = slvs_i[i].req_wdata;
+        assign rsp_rdy[i] = slvs_i[i].rsp_rdy;
+        assign slvs_i[i].req_rdy = state_q == IDLE
             && curr_idx_q == i && mst_o.req_rdy;
-        assign slvs_i[i].rsp_val = rst_ni && state_q == RESP && curr_idx_q == i;
+        assign slvs_i[i].rsp_val = state_q == RESP && curr_idx_q == i;
         assign slvs_i[i].rsp_rdata = rsp_data_buff_q;
     end
 
@@ -40,18 +43,22 @@ module two2one_spi_arbiter (
         state_d = state_q;
         curr_idx_d = curr_idx_q;
         rsp_data_buff_d = rsp_data_buff_q;
+        mst_o.req_val = 1'b0;
+        mst_o.rsp_rdy = 1'b0;
 
         case (state_q)
             IDLE: begin
+                mst_o.req_val = req_val[curr_idx_q];
                 if (mst_o.req_val) begin
                     if (mst_o.req_rdy)
                         state_d = WAIT;
-                end else if (curr_idx_q ? slvs_i[0].req_val : slvs_i[1].req_val) begin
+                end else if (req_val[!curr_idx_q]) begin
                     curr_idx_d = !curr_idx_q;
                 end
             end
 
             WAIT: begin
+                mst_o.rsp_rdy = 1'b1;
                 if (mst_o.rsp_val) begin
                     rsp_data_buff_d = mst_o.rsp_rdata;
                     state_d = RESP;
@@ -59,7 +66,7 @@ module two2one_spi_arbiter (
             end
 
             RESP: begin
-                if (curr_idx_q ? slvs_i[1].rsp_rdy : slvs_i[0].rsp_rdy) begin
+                if (rsp_rdy[curr_idx_q]) begin
                     state_d = IDLE;
                     curr_idx_d = !curr_idx_q;
                 end
