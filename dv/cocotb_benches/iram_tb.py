@@ -1,9 +1,19 @@
-"""Exercise IRAM through the real SPI master and a byte-addressed SPI slave."""
+"""Independent IRAM cases using the shared C++-backed ideal SPI RAM.
+
+The verification plan covers reset, cold fill, a 16-instruction stream, a jump
+following five instructions, a 64-instruction stream, and a jump after draining
+a window. Additional cases retain boundary, alias, wraparound, backpressure,
+redirect, and reset-during-refill coverage.
+"""
 
 import cocotb
 from cocotb.triggers import RisingEdge, Timer
 
 from dv.cocotb_benches.togawa_tb import tick
+
+
+WINDOW_WORDS = 16
+FETCH_TIMEOUT = 256
 
 
 def instruction(pc):
@@ -13,161 +23,287 @@ def instruction(pc):
 
 def refill_addresses(pc):
     return [(2 * (pc + offset) + byte) & 0xFFFF
-            for offset in range(16) for byte in range(2)]
+            for offset in range(WINDOW_WORDS) for byte in range(2)]
 
 
-async def spi_memory(dut, reads):
-    previous_cs, previous_sclk = 1, 0
-    bits, frame, address = 0, 0, 0
+def assert_window(dut, start):
+    assert dut.iram.iram_window_valid_q.value, "Instruction window is invalid"
+    assert int(dut.iram.iram_window_begin_q.value) == start
+
+
+async def monitor_reads(dut, reads):
     held_address = None
     while True:
         await RisingEdge(dut.clk_i)
+        if not dut.rst_ni.value or not dut.run_i.value:
+            held_address = None
+            continue
+        address = int(dut.iram_new_pc_o.value)
+        if held_address is not None:
+            assert dut.iram_val_o.value and address == held_address
+        if dut.iram_val_o.value and dut.spi_rdy_o.value:
+            reads.append(address)
+        held_address = address if dut.iram_val_o.value and not dut.spi_rdy_o.value else None
+
+
+async def reset(dut):
+    dut.clk_i.value = 0
+    dut.rst_ni.value = 0
+    dut.run_i.value = 0
+    dut.req_val_i.value = 0
+    dut.pc_i.value = 0
+    dut.rsp_rdy_i.value = 0
+    dut.mem_write_i.value = 0
+    dut.mem_addr_i.value = 0
+    dut.mem_data_i.value = 0
+    await tick(dut)
+    assert not dut.iram.iram_window_valid_q.value
+    assert not dut.req_rdy_o.value and not dut.rsp_val_o.value
+    assert not dut.iram_val_o.value and not dut.spi_val_o.value
+    dut.rst_ni.value = 1
+    await Timer(1, unit="ns")
+
+
+async def preload(dut, pcs):
+    """Load each requested window through the ideal memory's byte-write port."""
+    dut.run_i.value = 0
+    for address in sorted({address for pc in pcs for address in refill_addresses(pc)}):
+        dut.mem_addr_i.value = address
+        dut.mem_data_i.value = (instruction(address >> 1) >> (8 * (address & 1))) & 0xFF
+        dut.mem_write_i.value = 1
         await Timer(1, unit="ns")
-        cs, sclk = int(dut.spi_cs_n.value), int(dut.spi_sclk.value)
-        if not dut.rst_ni.value:
-            bits, frame, held_address = 0, 0, None
-            dut.spi_miso.value = 0
+        for _ in range(4):
+            accepted = bool(dut.spi_rdy_o.value)
+            await tick(dut)
+            if accepted:
+                break
         else:
-            if held_address is not None:
-                assert dut.iram_val_o.value
-                assert int(dut.iram_new_pc_o.value) == held_address
-            held_address = (int(dut.iram_new_pc_o.value)
-                            if dut.iram_val_o.value and not dut.spi_rdy_o.value else None)
-            if not cs:
-                if previous_cs:
-                    bits, frame = 0, 0
-                if sclk and not previous_sclk:
-                    frame = (frame << 1) | int(dut.spi_mosi.value)
-                    bits += 1
-                    if bits == 24:
-                        assert frame >> 16 == 0x03, "expected a SPI read command"
-                        address = frame & 0xFFFF
-                elif previous_sclk and not sclk and 24 <= bits < 32:
-                    byte = (instruction(address >> 1) >> (8 * (address & 1))) & 0xFF
-                    dut.spi_miso.value = (byte >> (31 - bits)) & 1
-            elif not previous_cs:
-                assert bits == 32, "SPI frame must contain command, 16-bit address, and byte"
-                assert frame & 0xFF == 0, "read frames must send a zero data byte"
-                reads.append(address)
-                dut.spi_miso.value = 0
-        previous_cs, previous_sclk = cs, sclk
+            raise AssertionError("Ideal SPI RAM did not accept preload byte")
+        dut.mem_write_i.value = 0
+        for _ in range(4):
+            if dut.spi_val_o.value:
+                break
+            await tick(dut)
+        else:
+            raise AssertionError("Ideal SPI RAM did not acknowledge preload byte")
+    dut.run_i.value = 1
+    await Timer(1, unit="ns")
 
 
-async def fetch(dut, reads, pc, *, hold=0):
-    start = len(reads)
+async def setup(dut, *pcs):
+    await reset(dut)
+    await preload(dut, pcs)
+    reads = []
+    # cocotb cancels this passive monitor when its test ends, including failures.
+    cocotb.start_soon(monitor_reads(dut, reads))
+    return reads
+
+
+async def select_pc(dut, pc):
     dut.pc_i.value = pc
     dut.req_val_i.value = 1
     dut.rsp_rdy_i.value = 0
     await Timer(1, unit="ns")
-    for _ in range(10000):
+
+
+async def wait_for_response(dut):
+    for _ in range(FETCH_TIMEOUT):
+        if dut.rsp_val_o.value:
+            return
         accepted = dut.req_val_i.value and dut.req_rdy_o.value
         await tick(dut)
         if accepted:
             dut.req_val_i.value = 0
-        if dut.rsp_val_o.value:
-            assert int(dut.inst_o.value) == instruction(pc), f"wrong instruction at PC {pc:#x}"
-            completed = len(reads)
-            for _ in range(hold):
-                await tick(dut)
-                assert dut.rsp_val_o.value
-                assert int(dut.inst_o.value) == instruction(pc)
-                assert len(reads) == completed
-            # A fetched HALT can withdraw request valid before accepting its response.
-            dut.req_val_i.value = 0
-            await Timer(1, unit="ns")
-            assert dut.rsp_val_o.value
-            dut.rsp_rdy_i.value = 1
-            await tick(dut)
-            return reads[start:]
-    raise AssertionError(f"IRAM did not return PC {pc:#x}")
+    raise AssertionError(f"IRAM did not return PC {int(dut.pc_i.value):#x}")
+
+
+async def receive(dut, reads, pc, *, hold=0):
+    await wait_for_response(dut)
+    assert int(dut.inst_o.value) == instruction(pc), f"Wrong instruction at PC {pc:#x}"
+    completed = len(reads)
+    for _ in range(hold):
+        await tick(dut)
+        assert dut.rsp_val_o.value and int(dut.inst_o.value) == instruction(pc)
+        assert len(reads) == completed, "Held response caused another refill"
+    # Fetching HALT withdraws request valid before accepting the response.
+    dut.req_val_i.value = 0
+    await Timer(1, unit="ns")
+    assert dut.rsp_val_o.value
+    dut.rsp_rdy_i.value = 1
+    await tick(dut)
+    assert not dut.rsp_val_o.value, "Accepted response was returned twice"
+
+
+async def fetch(dut, reads, pc, *, hold=0):
+    start = len(reads)
+    await select_pc(dut, pc)
+    await receive(dut, reads, pc, hold=hold)
+    return reads[start:]
+
+
+async def stream(dut, reads, start, count):
+    """Check every instruction and require exactly one refill per 16 words."""
+    for offset in range(count):
+        pc = (start + offset) & 0xFFFF
+        expected = refill_addresses(pc) if offset % WINDOW_WORDS == 0 else []
+        assert await fetch(dut, reads, pc) == expected
+        assert_window(dut, (start + offset // WINDOW_WORDS * WINDOW_WORDS) & 0xFFFF)
 
 
 @cocotb.test(timeout_time=1, timeout_unit="ms")
-async def refill_hits_redirects_and_reset(dut):
-    dut.clk_i.value = 0
-    dut.rst_ni.value = 0
-    dut.req_val_i.value = 0
-    dut.pc_i.value = 0
-    dut.rsp_rdy_i.value = 0
-    dut.spi_miso.value = 0
-    reads = []
-    memory = cocotb.start_soon(spi_memory(dut, reads))
-    await tick(dut)
-    dut.rst_ni.value = 1
+async def reset_invalidates_window(dut):
+    reads = await setup(dut, 5)
+    for _ in range(4):
+        await tick(dut)
+        assert not dut.iram.iram_window_valid_q.value
+        assert not dut.rsp_val_o.value and not dut.iram_val_o.value
+    assert reads == []
+    assert await fetch(dut, reads, 5) == refill_addresses(5)
+    assert_window(dut, 5)
+    await reset(dut)
 
-    # A cold miss requests SPI on the next cycle without reading SRAM first.
-    dut.pc_i.value = 5
-    dut.req_val_i.value = 1
-    await Timer(1, unit="ns")
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def reset_and_fill(dut):
+    reads = await setup(dut, 5)
+    await select_pc(dut, 5)
     assert dut.req_rdy_o.value and not dut.iram.sram_req_val.value
     await tick(dut)
     assert dut.iram_val_o.value and not dut.rsp_val_o.value
+    assert not dut.iram.iram_window_valid_q.value
+    await receive(dut, reads, 5)
+    assert reads == refill_addresses(5)
+    assert_window(dut, 5)
 
-    # Unaligned fill starts at the requested PC; all sixteen words then hit.
-    assert await fetch(dut, reads, 5, hold=4) == refill_addresses(5)
-    for pc in range(5, 21):
-        assert await fetch(dut, reads, pc) == []
 
-    # The window end is exclusive; PCs below the window and far away also miss.
-    assert await fetch(dut, reads, 21) == refill_addresses(21)
-    assert await fetch(dut, reads, 4) == refill_addresses(4)
-    assert await fetch(dut, reads, 0x8005) == refill_addresses(0x8005)
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def reset_and_stream_16(dut):
+    reads = await setup(dut, 5)
+    await stream(dut, reads, 5, 16)
+    assert reads == refill_addresses(5)
 
-    # SPI byte addresses wrap at 64 KiB while word PCs remain sixteen bits.
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def reset_and_jump_after_five(dut):
+    reads = await setup(dut, 5, 0x100)
+    await stream(dut, reads, 5, 5)
+    assert await fetch(dut, reads, 0x100) == refill_addresses(0x100)
+    assert_window(dut, 0x100)
+    assert reads == refill_addresses(5) + refill_addresses(0x100)
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def drain_and_continue_64(dut):
+    starts = (0x40, 0x50, 0x60, 0x70)
+    reads = await setup(dut, *starts)
+    await stream(dut, reads, starts[0], 64)
+    assert reads == [address for pc in starts for address in refill_addresses(pc)]
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def drain_and_jump(dut):
+    reads = await setup(dut, 0x10, 0x100)
+    await stream(dut, reads, 0x10, 16)
+    assert await fetch(dut, reads, 0x100) == refill_addresses(0x100)
+    assert_window(dut, 0x100)
+    assert reads == refill_addresses(0x10) + refill_addresses(0x100)
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def window_boundaries(dut):
+    reads = await setup(dut, 0x20, 0x30, 0x2F)
+    assert await fetch(dut, reads, 0x20) == refill_addresses(0x20)
+    assert await fetch(dut, reads, 0x2F) == []  # Last word still hits.
+    assert await fetch(dut, reads, 0x30) == refill_addresses(0x30)  # End is exclusive.
+    assert_window(dut, 0x30)
+    assert await fetch(dut, reads, 0x2F) == refill_addresses(0x2F)  # Below the window misses.
+    assert_window(dut, 0x2F)
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def high_pc_spi_alias(dut):
+    reads = await setup(dut, 5, 0x8005)
+    assert await fetch(dut, reads, 5) == refill_addresses(5)
+    # Different logical windows use the same physical SPI byte addresses.
+    assert await fetch(dut, reads, 0x8005) == refill_addresses(5)
+    assert_window(dut, 0x8005)
+    assert await fetch(dut, reads, 0x8014) == []
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def spi_byte_address_wraparound(dut):
+    reads = await setup(dut, 0x7FF8)
     assert await fetch(dut, reads, 0x7FF8) == refill_addresses(0x7FF8)
     for pc in (0x7FFF, 0x8000, 0x8007):
         assert await fetch(dut, reads, pc) == []
+    assert_window(dut, 0x7FF8)
 
-    # The logical word PC also wraps at sixteen bits.
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def word_pc_wraparound(dut):
+    reads = await setup(dut, 0xFFF8, 8)
     assert await fetch(dut, reads, 0xFFF8) == refill_addresses(0xFFF8)
     for pc in (0xFFFF, 0, 7):
         assert await fetch(dut, reads, pc) == []
-
-    # Redirect a held hit: the old instruction must disappear immediately.
-    dut.pc_i.value = 0
-    dut.req_val_i.value = 1
-    dut.rsp_rdy_i.value = 0
-    for _ in range(10):
-        await tick(dut)
-        if dut.rsp_val_o.value:
-            break
-    else:
-        raise AssertionError("cached instruction did not respond")
-    dut.pc_i.value = 7
-    await Timer(1, unit="ns")
-    assert not dut.rsp_val_o.value, "redirect exposed an old-PC response"
-    assert await fetch(dut, reads, 7) == []
+    assert_window(dut, 0xFFF8)
     assert await fetch(dut, reads, 8) == refill_addresses(8)
+    assert_window(dut, 8)
 
-    # A redirect during refill drains that fill and fetches the new PC.
-    start = len(reads)
-    dut.pc_i.value = 0x100
-    dut.req_val_i.value = 1
-    dut.rsp_rdy_i.value = 0
-    for _ in range(1000):
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def response_backpressure(dut):
+    reads = await setup(dut, 5)
+    assert await fetch(dut, reads, 5, hold=8) == refill_addresses(5)
+    assert await fetch(dut, reads, 6, hold=5) == []
+    assert_window(dut, 5)
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def redirect_held_hit(dut):
+    reads = await setup(dut, 0x100, 0x110)
+    assert await fetch(dut, reads, 0x100) == refill_addresses(0x100)
+    await select_pc(dut, 0x100)
+    await wait_for_response(dut)
+    dut.pc_i.value = 0x107
+    await Timer(1, unit="ns")
+    assert not dut.rsp_val_o.value, "Redirect exposed an old-PC response"
+    assert await fetch(dut, reads, 0x107) == []
+    assert await fetch(dut, reads, 0x110) == refill_addresses(0x110)
+    assert_window(dut, 0x110)
+
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def redirect_during_refill(dut):
+    reads = await setup(dut, 0x100, 0x200)
+    await select_pc(dut, 0x100)
+    for _ in range(FETCH_TIMEOUT):
         await tick(dut)
-        if len(reads) >= start + 5:
+        if len(reads) >= 5:
             break
     else:
-        raise AssertionError("SPI refill did not start")
+        raise AssertionError("Refill did not start before redirect")
     await fetch(dut, reads, 0x200)
-    assert reads[start:] == refill_addresses(0x100) + refill_addresses(0x200)
+    assert reads == refill_addresses(0x100) + refill_addresses(0x200)
+    assert_window(dut, 0x200)
 
-    # Reset cancels an active SPI frame and invalidates the existing window.
+
+@cocotb.test(timeout_time=1, timeout_unit="ms")
+async def reset_during_refill(dut):
+    reads = await setup(dut, 0x200, 0x300)
+    assert await fetch(dut, reads, 0x200) == refill_addresses(0x200)
     start = len(reads)
-    dut.pc_i.value = 0x300
-    dut.req_val_i.value = 1
-    for _ in range(1000):
+    await select_pc(dut, 0x300)
+    for _ in range(FETCH_TIMEOUT):
         await tick(dut)
-        if len(reads) >= start + 3 and not dut.spi_cs_n.value:
+        if len(reads) >= start + 3 and not dut.spi_rdy_o.value:
             break
     else:
-        raise AssertionError("no active SPI frame to reset")
-    dut.rst_ni.value = 0
-    dut.req_val_i.value = 0
-    await tick(dut)
-    assert not dut.rsp_val_o.value and not dut.iram_val_o.value
-    assert dut.spi_cs_n.value
-    dut.rst_ni.value = 1
+        raise AssertionError("No pending memory transaction to reset")
+    await reset(dut)
+    for _ in range(3):
+        await tick(dut)
+        assert not dut.spi_val_o.value, "Reset leaked a pending memory response"
+        assert not dut.rsp_val_o.value and not dut.iram.iram_window_valid_q.value
+    await preload(dut, (0x200,))
     assert await fetch(dut, reads, 0x200) == refill_addresses(0x200)
-    memory.cancel()
+    assert_window(dut, 0x200)

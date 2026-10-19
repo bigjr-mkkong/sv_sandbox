@@ -1,38 +1,54 @@
+#include <algorithm>
+#include <cstddef>
 #include <cstdint>
 #include <map>
+#include <memory>
 
 #include <svdpi.h>
 
 namespace {
 
-struct cacheline {
-    std::uint16_t line_data;
+struct data_blk {
+    std::unique_ptr<std::byte[]> data;
 };
 
 class cpp_ideal_mem {
   public:
+    explicit cpp_ideal_mem(std::size_t data_width) : data_width(data_width) {}
+
     void reset() {
         mem.clear();
     }
 
-    void write_data(std::uint32_t addr, const cacheline& data) {
-        mem[normalize_address(addr)] = data;
+    void write_data(std::uint32_t addr, const svBitVecVal* data) {
+        auto& block = mem[normalize_address(addr)];
+        if (!block.data) {
+            block.data = std::make_unique<std::byte[]>(data_width / 8);
+        }
+        for (std::size_t i = 0; i < data_width / 8; ++i) {
+            block.data[i] = static_cast<std::byte>((data[i / 4] >> (8 * (i % 4))) & 0xff);
+        }
     }
 
-    cacheline read_data(std::uint32_t addr) const {
+    void read_data(std::uint32_t addr, svBitVecVal* data) const {
+        std::fill_n(data, (data_width + 31) / 32, svBitVecVal{0});
         const auto entry = mem.find(normalize_address(addr));
         if (entry == mem.end()) {
-            return {};
+            return;
         }
-        return entry->second;
+        for (std::size_t i = 0; i < data_width / 8; ++i) {
+            data[i / 4] |= std::to_integer<svBitVecVal>(entry->second.data[i]) << (8 * (i % 4));
+        }
     }
 
   private:
-    static std::uint32_t normalize_address(std::uint32_t addr) {
-        return addr & ~std::uint32_t{1};
+    std::size_t normalize_address(std::uint32_t addr) const {
+        const auto byte_width = data_width / 8;
+        return addr - addr % byte_width;
     }
 
-    std::map<std::uint32_t, cacheline> mem;
+    const std::size_t data_width;
+    std::map<std::size_t, data_blk> mem;
 };
 
 cpp_ideal_mem* as_memory(void* handle) {
@@ -41,8 +57,12 @@ cpp_ideal_mem* as_memory(void* handle) {
 
 }  // namespace
 
-extern "C" void* ideal_mem_create() {
-    return new cpp_ideal_mem();
+// Width is in bits; accesses use byte addresses aligned to one data block.
+extern "C" void* ideal_mem_create(unsigned int data_width) {
+    if (data_width == 0 || data_width % 8 != 0) {
+        return nullptr;
+    }
+    return new cpp_ideal_mem(data_width);
 }
 
 extern "C" void ideal_mem_destroy(void* handle) {
@@ -60,13 +80,9 @@ extern "C" void ideal_mem_write(
     unsigned int addr,
     const svBitVecVal* data
 ) {
-    if (handle == nullptr || data == nullptr) {
-        return;
+    if (handle != nullptr && data != nullptr) {
+        as_memory(handle)->write_data(addr, data);
     }
-
-    cacheline line{};
-    line.line_data = static_cast<std::uint16_t>(data[0]);
-    as_memory(handle)->write_data(static_cast<std::uint32_t>(addr), line);
 }
 
 extern "C" void ideal_mem_read(
@@ -77,12 +93,9 @@ extern "C" void ideal_mem_read(
     if (data == nullptr) {
         return;
     }
-
-    data[0] = 0;
     if (handle == nullptr) {
+        data[0] = 0;
         return;
     }
-
-    const cacheline line = as_memory(handle)->read_data(static_cast<std::uint32_t>(addr));
-    data[0] = static_cast<svBitVecVal>(line.line_data);
+    as_memory(handle)->read_data(addr, data);
 }

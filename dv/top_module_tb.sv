@@ -4,7 +4,7 @@ module top_module_tb;
 
     top_module_runner runner();
 
-    import "DPI-C" function chandle ideal_mem_create();
+    import "DPI-C" function chandle ideal_mem_create(input int unsigned data_width);
     import "DPI-C" function void ideal_mem_destroy(input chandle handle);
     import "DPI-C" function void ideal_mem_reset(input chandle handle);
     import "DPI-C" function void ideal_mem_write(
@@ -26,8 +26,8 @@ module top_module_tb;
         $dumpvars(0, top_module_tb);
         $display("Begin RTL simulation.");
 
-        memory = ideal_mem_create();
-        other_memory = ideal_mem_create();
+        memory = ideal_mem_create(16);
+        other_memory = ideal_mem_create(16);
         assert (memory != null && other_memory != null) else $fatal(1, "Memory allocation failed");
         ideal_mem_read(memory, 32'h0001_4000, read_data);
         assert (read_data == '0) else $fatal(1, "Unwritten memory must read zero");

@@ -99,7 +99,6 @@ endmodule
     module_name = "iram_blk",
     test_framework = "cocotb",
     use_wrapper = true,
-    rtl_dependencies = ["rtl/spi_master.sv"],
     test_path = "dv/cocotb_benches/iram_tb.py") %}
 module iram_blk #(
     parameter int unsigned DATA_W = 16,

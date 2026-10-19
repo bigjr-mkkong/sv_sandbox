@@ -11,22 +11,23 @@ endpackage
 
 interface spi_ram_if;
 
-    logic        req_val_i;
+    logic        req_val;
     logic        req_rdy;
     logic        req_we;
     logic [15:0] req_addr;
     logic [7:0]  req_wdata;
-    logic        resp_val;
-    logic [7:0]  resp_rdata;
+    logic        rsp_val;
+    logic [7:0]  rsp_rdata;
+    logic        rsp_rdy;
 
-    // Responses pulse for one cycle; the requester must always accept them.
+    // Request and response payloads remain stable until valid and ready meet.
     modport if_src (
-        output req_val_i, req_we, req_addr, req_wdata,
-        input  req_rdy, resp_val, resp_rdata
+        output req_val, req_we, req_addr, req_wdata, rsp_rdy,
+        input  req_rdy, rsp_val, rsp_rdata
     );
 
     modport if_sink (
-        input  req_val_i, req_we, req_addr, req_wdata,
-        output req_rdy, resp_val, resp_rdata
+        input  req_val, req_we, req_addr, req_wdata, rsp_rdy,
+        output req_rdy, rsp_val, rsp_rdata
     );
 endinterface

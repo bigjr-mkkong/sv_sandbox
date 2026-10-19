@@ -28,7 +28,7 @@ module togawa_pipeline_unit_test (
     output logic [15:0] dcache_req_data_o,
     output logic halt
 );
-    import "DPI-C" function chandle ideal_mem_create();
+    import "DPI-C" function chandle ideal_mem_create(input int unsigned data_width);
     import "DPI-C" function void ideal_mem_destroy(input chandle handle);
     import "DPI-C" function void ideal_mem_reset(input chandle handle);
     import "DPI-C" function void ideal_mem_write(
@@ -45,8 +45,8 @@ module togawa_pipeline_unit_test (
     logic [15:0] data_addr_q, data_word_q;
 
     initial begin
-        icache = ideal_mem_create();
-        dcache = ideal_mem_create();
+        icache = ideal_mem_create(16);
+        dcache = ideal_mem_create(16);
         assert (icache != null && dcache != null)
             else $fatal(1, "SRAM allocation failed");
     end

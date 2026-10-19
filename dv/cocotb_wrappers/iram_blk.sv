@@ -4,6 +4,10 @@
 module iram_blk_unit_test (
     input  logic clk_i,
     input  logic rst_ni,
+    input  logic run_i,
+    input  logic mem_write_i,
+    input  logic [15:0] mem_addr_i,
+    input  logic [7:0] mem_data_i,
     input  logic req_val_i,
     input  logic [15:0] pc_i,
     output logic req_rdy_o,
@@ -13,22 +17,13 @@ module iram_blk_unit_test (
     output logic iram_val_o,
     output logic [15:0] iram_new_pc_o,
     output logic spi_rdy_o,
-    output logic spi_cs_n,
-    output logic spi_sclk,
-    output logic spi_mosi,
-    input  logic spi_miso
+    output logic spi_val_o
 );
-    spi_ram_if spi_req();
-
-    assign spi_req.req_val_i = iram_val_o;
-    assign spi_req.req_we = 1'b0;
-    assign spi_req.req_addr = iram_new_pc_o;
-    assign spi_req.req_wdata = 8'd0;
-    assign spi_rdy_o = spi_req.req_rdy;
+    logic [7:0] spi_data;
 
     iram_blk iram (
         .clk_i(clk_i),
-        .rst_ni(rst_ni),
+        .rst_ni(rst_ni && run_i),
         .req_val_i(req_val_i),
         .pc_i(pc_i),
         .req_rdy_o(req_rdy_o),
@@ -38,18 +33,21 @@ module iram_blk_unit_test (
         .iram_val_o(iram_val_o),
         .iram_new_pc_o(iram_new_pc_o),
         .spi_rdy_i(spi_rdy_o),
-        .spi_val_i(spi_req.resp_val),
-        .spi_data_i(spi_req.resp_rdata)
+        .spi_val_i(spi_val_o),
+        .spi_data_i(spi_data)
     );
 
-    spi_master #(.CLK_DIV(1), .CS_HIGH_CYCLES(3)) spi (
-        .clk(clk_i),
-        .rst(!rst_ni),
-        .mem_if(spi_req),
-        .spi_cs_n(spi_cs_n),
-        .spi_sclk(spi_sclk),
-        .spi_mosi(spi_mosi),
-        .spi_miso(spi_miso)
+    // Preload through the same memory port while IRAM is held in reset.
+    ideal_spi_ram spi (
+        .clk_i(clk_i),
+        .rst_ni(rst_ni),
+        .req_val(run_i ? iram_val_o : mem_write_i),
+        .req_rdy(spi_rdy_o),
+        .req_we(!run_i),
+        .req_addr(run_i ? iram_new_pc_o : mem_addr_i),
+        .req_wdata(mem_data_i),
+        .resp_val(spi_val_o),
+        .resp_rdata(spi_data)
     );
 endmodule
 /* verilator lint_on DECLFILENAME */

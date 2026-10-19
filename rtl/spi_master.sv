@@ -14,7 +14,14 @@ module spi_master #(
     input  wire        rst,
 
     // ---- Memory request/response port ----
-    spi_ram_if.if_sink mem_if,
+    input  wire        req_val,
+    output wire        req_rdy,
+    input  wire        req_we,
+    input  wire [15:0] req_addr,
+    input  wire [7:0]  req_wdata,
+
+    output reg         resp_val,
+    output reg  [7:0]  resp_rdata,
 
     // ---- SPI pins ----
     output reg         spi_cs_n,
@@ -51,32 +58,31 @@ module spi_master #(
 
     assign spi_mosi = shift_out[31];
 
-    assign mem_if.req_rdy = (state == ST_IDLE);
+    assign req_rdy = (state == ST_IDLE);
 
     always @(posedge clk) begin
         if (rst) begin
             state      <= ST_IDLE;
             spi_cs_n   <= 1'b1;
             spi_sclk   <= 1'b0;
-            mem_if.resp_val   <= 1'b0;
-            mem_if.resp_rdata <= 8'h00;
+            resp_val   <= 1'b0;
+            resp_rdata <= 8'h00;
             shift_out  <= 32'h0;
             shift_in   <= 8'h0;
             bit_idx    <= 6'd0;
             div_cnt    <= {DIVW{1'b0}};
             cs_wait    <= {CSW{1'b0}};
         end else begin
-            mem_if.resp_val <= 1'b0;
+            resp_val <= 1'b0;
 
             case (state)
                 // ---------------------------------------------------------
                 ST_IDLE: begin
                     spi_cs_n <= 1'b1;
                     spi_sclk <= 1'b0;
-                    if (mem_if.req_val_i) begin
-                        shift_out <= mem_if.req_we
-                            ? {CMD_WRITE, mem_if.req_addr, mem_if.req_wdata}
-                            : {CMD_READ,  mem_if.req_addr, 8'h00};
+                    if (req_val) begin
+                        shift_out <= req_we ? {CMD_WRITE, req_addr, req_wdata}
+                                            : {CMD_READ,  req_addr, 8'h00};
                         spi_cs_n  <= 1'b0;   // assert CS, begin the frame
                         spi_sclk  <= 1'b0;
                         div_cnt   <= {DIVW{1'b0}};
@@ -108,8 +114,8 @@ module spi_master #(
 
                 // ---------------------------------------------------------
                 ST_DONE: begin
-                    mem_if.resp_val   <= 1'b1;
-                    mem_if.resp_rdata <= shift_in;
+                    resp_val   <= 1'b1;
+                    resp_rdata <= shift_in;
                     spi_sclk   <= 1'b0;
                     spi_cs_n   <= 1'b1;                    // keep CS de-asserted
                     cs_wait    <= CSW'(CS_HIGH_CYCLES - 1);
@@ -118,7 +124,7 @@ module spi_master #(
 
                 // ---------------------------------------------------------
                 // Hold CS high long enough for the RP2040 to recover before
-                // the next frame. mem_if.req_rdy stays low (state != ST_IDLE), so a
+                // the next frame. req_rdy stays low (state != ST_IDLE), so a
                 // pending request is held until recovery completes.
                 ST_WAIT: begin
                     spi_cs_n <= 1'b1;

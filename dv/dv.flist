@@ -17,4 +17,4 @@ cpp/ideal_mem.cpp
 -Werror-USERERROR
 -Werror-LATCH
 
--CFLAGS -std=c++14
+-CFLAGS -std=c++17
