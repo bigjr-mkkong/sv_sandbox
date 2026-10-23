@@ -1,12 +1,15 @@
-// Third-party RTL. Keep interfaces before the modules that use them.
-third_party/taxi/src/axis/rtl/taxi_axis_if.sv
-third_party/taxi/src/lss/rtl/taxi_uart_brg.sv
-third_party/taxi/src/lss/rtl/taxi_uart_tx.sv
-third_party/taxi/src/lss/rtl/taxi_uart_rx.sv
-third_party/taxi/src/lss/rtl/taxi_uart.sv
+// Third-party SRAM implementation.
+third_party/basejump_stl/bsg_misc/bsg_dff.sv
+third_party/basejump_stl/bsg_misc/bsg_dff_en.sv
+third_party/basejump_stl/bsg_misc/bsg_dff_en_bypass.sv
+third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync_synth.sv
+third_party/basejump_stl/bsg_mem/bsg_mem_1rw_sync.sv
 
-// Project RTL. Files below rtl/ are rendered into build/rtl/.
+// Project RTL. Keep interfaces before their users.
 rtl/config_pkg.sv
 rtl/togawa.sv
+rtl/cache.sv
+rtl/spi_arbiter.sv
+rtl/spi_master.sv
 rtl/main_module.sv
 rtl/top_module.sv

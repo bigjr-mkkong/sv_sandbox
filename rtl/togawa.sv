@@ -1,10 +1,5 @@
 `timescale 1ns / 1ps
 
-{% do unit_test(
-    module_name = "togawa_pipeline",
-    test_framework = "cocotb",
-    use_wrapper = true,
-    test_path = "dv/cocotb_benches/togawa_tb.py") %}
 module togawa_pipeline (
     input  logic        clk_i,
     input  logic        rst_ni,
@@ -18,15 +13,7 @@ module togawa_pipeline (
     input  logic [15:0] icache_inst_i,
     output logic        icache_rdy_o,
 
-    output logic        dcache_req_val_o,
-    input  logic        dcache_req_rdy_i,
-    output logic        dcache_req_w,
-    output logic [15:0] dcache_req_addr_o,
-    output logic [15:0] dcache_req_data_o,
-
-    input  logic        dcache_rsp_val_i,
-    input  logic [15:0] dcache_rsp_data_i,
-    output logic        dcache_rsp_rdy_o,
+    spi_ram_if.if_src   spi_o,
 
     output logic        halt
 );
@@ -44,25 +31,29 @@ module togawa_pipeline (
     logic halt_d, halt_q;
     logic stall, flush;
 
-    typedef enum logic { IDLE, WAIT } dcache_state_t;
-    dcache_state_t dcache_state_d, dcache_state_q;
+    typedef enum logic { IDLE, WAIT } spi_state_t;
+    spi_state_t spi_state_d, spi_state_q;
+    logic byte_d, byte_q;
+    logic [7:0] load_low_d, load_low_q;
 
     assign pc_o = pc_q;
-    assign halt = halt_q && !reg_dirty_q && dcache_state_q == IDLE;
+    assign halt = halt_q && !reg_dirty_q && spi_state_q == IDLE;
     wire _unused_ok = &{1'b0, icache_req_rdy_i};
 
     always_comb begin : idexmem_stage
         reg_d = reg_q;
         reg_addr_d = reg_addr_q;
         reg_dirty_d = reg_dirty_q;
-        dcache_state_d = dcache_state_q;
+        spi_state_d = spi_state_q;
+        byte_d = byte_q;
+        load_low_d = load_low_q;
 
-        dcache_req_val_o = 1'b0;
-        dcache_req_w = reg_dirty_q;
-        dcache_req_addr_o = reg_dirty_q
-            ? reg_addr_q : {inst_q[14:0], 1'b0};
-        dcache_req_data_o = reg_q;
-        dcache_rsp_rdy_o = 1'b0;
+        spi_o.req_val = 1'b0;
+        spi_o.req_we = reg_dirty_q;
+        spi_o.req_addr = reg_dirty_q
+            ? {reg_addr_q[15:1], byte_q} : {inst_q[14:0], byte_q};
+        spi_o.req_wdata = byte_q ? reg_q[15:8] : reg_q[7:0];
+        spi_o.rsp_rdy = 1'b0;
         stall = 1'b0;
         flush = 1'b0;
         branch_pc = pc_q;
@@ -71,20 +62,24 @@ module togawa_pipeline (
         if (rst_ni && !halt && (inst_valid_q || halt_q)) begin
             if (inst_q[15] || inst_q == 16'h0000) begin
                 stall = 1'b1;
-                case (dcache_state_q)
+                case (spi_state_q)
                     IDLE: begin
-                        dcache_req_val_o = 1'b1;
-                        if (dcache_req_rdy_i)
-                            dcache_state_d = WAIT;
+                        spi_o.req_val = 1'b1;
+                        if (spi_o.req_rdy)
+                            spi_state_d = WAIT;
                     end
                     WAIT: begin
-                        dcache_rsp_rdy_o = 1'b1;
-                        if (dcache_rsp_val_i) begin
-                            dcache_state_d = IDLE;
-                            if (reg_dirty_q) begin
+                        spi_o.rsp_rdy = 1'b1;
+                        if (spi_o.rsp_val) begin
+                            spi_state_d = IDLE;
+                            // Complete a word only after both byte acknowledgements.
+                            byte_d = !byte_q;
+                            if (!byte_q) begin
+                                load_low_d = spi_o.rsp_rdata;
+                            end else if (reg_dirty_q) begin
                                 reg_dirty_d = 1'b0;
                             end else begin
-                                reg_d = dcache_rsp_data_i;
+                                reg_d = {spi_o.rsp_rdata, load_low_q};
                                 reg_addr_d = {inst_q[14:0], 1'b0};
                                 stall = 1'b0;
                             end
@@ -144,14 +139,18 @@ module togawa_pipeline (
             reg_addr_q <= 16'd0;
             reg_dirty_q <= 1'b0;
             pc_q <= 16'd0;
-            dcache_state_q <= IDLE;
+            spi_state_q <= IDLE;
+            byte_q <= 1'b0;
+            load_low_q <= '0;
             halt_q <= 1'b0;
         end else begin
             reg_q <= reg_d;
             reg_addr_q <= reg_addr_d;
             reg_dirty_q <= reg_dirty_d;
             pc_q <= pc_d;
-            dcache_state_q <= dcache_state_d;
+            spi_state_q <= spi_state_d;
+            byte_q <= byte_d;
+            load_low_q <= load_low_d;
             halt_q <= halt_d;
         end
     end

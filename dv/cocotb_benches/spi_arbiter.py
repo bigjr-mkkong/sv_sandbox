@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import cocotb
 from cocotb.triggers import Timer
 
-from dv.cocotb_benches.togawa_tb import tick
+from dv.cocotb_benches.clock import tick
 
 
 def ports(dut):
@@ -56,6 +56,8 @@ async def response(dut, sources, index, expected, hold=0):
     for _ in range(12):
         if source.rsp_val_o.value:
             break
+        assert not other.rsp_val_o.value, "Response routed to the wrong source"
+        assert not source.req_rdy_o.value and not other.req_rdy_o.value
         await tick(dut)
     else:
         raise AssertionError("Memory did not respond")
@@ -137,3 +139,62 @@ async def reset_cancels_pending_work_and_clears_memory(dut):
         await tick(dut)
         assert not any(source.rsp_val_o.value for source in sources)
     await transaction(dut, sources, 1, 0x301)
+
+
+@cocotb.test(timeout_time=100, timeout_unit="us")
+async def reset_only(dut):
+    sources = ports(dut)
+    await reset(dut, sources)
+    dut.rst_ni.value = 0
+    for _ in range(4):
+        await tick(dut)
+        for source in sources:
+            assert not source.req_rdy_o.value and not source.rsp_val_o.value
+            assert int(source.rsp_rdata_o.value) == 0
+    dut.rst_ni.value = 1
+    for _ in range(4):
+        await tick(dut)
+        # The reset memory gates ready low; once released, source 0 is preferred.
+        assert sources[0].req_rdy_o.value and not sources[1].req_rdy_o.value
+        for source in sources:
+            assert not source.rsp_val_o.value and int(source.rsp_rdata_o.value) == 0
+
+
+@cocotb.test(timeout_time=100, timeout_unit="us")
+async def single_request(dut):
+    sources = ports(dut)
+    for index in range(2):
+        await reset(dut, sources)
+        await transaction(dut, sources, index, 0x1234, hold=3)
+        for _ in range(4):
+            await tick(dut)
+            assert not any(source.rsp_val_o.value for source in sources)
+
+
+@cocotb.test(timeout_time=100, timeout_unit="us")
+async def overlapping_requests(dut):
+    sources = ports(dut)
+    for first in range(2):
+        await reset(dut, sources)
+        request(sources[first], 0x400, 0x12)
+        await accept(dut, sources[first])
+        request(sources[1 - first], 0x400, 0xA7)
+        await response(dut, sources, first, 0, hold=3)
+        await accept(dut, sources[1 - first])
+        await response(dut, sources, 1 - first, 0)
+        await transaction(dut, sources, first, 0x400, expected=0xA7)
+
+
+@cocotb.test(timeout_time=100, timeout_unit="us")
+async def simultaneous_requests(dut):
+    sources = ports(dut)
+    await reset(dut, sources)
+    for index, value in enumerate((0x12, 0xA7)):
+        request(sources[index], 0x400, value)
+    await Timer(1, unit="ns")
+    assert sources[0].req_rdy_o.value and not sources[1].req_rdy_o.value
+    await accept(dut, sources[0])
+    await response(dut, sources, 0, 0, hold=3)
+    await accept(dut, sources[1])
+    await response(dut, sources, 1, 0)
+    await transaction(dut, sources, 0, 0x400, expected=0xA7)

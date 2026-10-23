@@ -4,9 +4,11 @@ This repository develops an unfinished TOGAWA CPU using a SystemVerilog and
 cocotb template. It includes RTL rendering, unit tests, waveform traces, coverage,
 and optional synthesis and FPGA flows.
 
-The CPU components are tested individually. The current `top_module` still runs
-the template's UART example, transmitting `A` through `Z` at 115200 baud. The
-FPGA and OpenROAD targets therefore build that example, not a complete CPU.
+`top_module` exposes the integrated CPU's SPI pins and HALT output.
+`main_module` connects the pipeline to IRAM, shares one SPI master through the
+arbiter, and uses the real serial master. Integrated execution tests await a
+SPI memory verification model; existing tests cover IRAM, the arbiter, and the
+shared ideal-memory model.
 
 ## Installation and prerequisites
 
@@ -158,17 +160,14 @@ then run:
 ```bash
 make lint
 make unit-test
-make test
 ```
 
 - `make lint` renders and lints the current top-level source set.
-- `make unit-test` runs the registered CPU, IRAM, SPI-arbiter, and
-  alphabet-generator tests, then generates annotated Verilator coverage.
-- `make test` runs the SystemVerilog UART testbench and C++ ideal-memory checks.
+- `make unit-test` runs the registered IRAM and SPI-arbiter tests, then
+  generates annotated Verilator coverage.
 
-These commands are a useful first check of a collaborator's environment. They
-verify different parts of the project; UART success alone does not validate the
-CPU components. Running `make` with no target only prints help.
+These checks do not execute programs on the integrated CPU or verify serial
+SPI memory behavior. Running `make` with no target only prints help.
 
 ### Troubleshooting setup
 
@@ -193,16 +192,17 @@ The implementation and integration are still in progress.
 
 | Component | Source | Current role |
 | --- | --- | --- |
-| CPU pipeline | [rtl/togawa.sv](rtl/togawa.sv) | Executes TOGA, WA, and HALT; tested using ideal instruction and data memories. |
+| CPU pipeline | [rtl/togawa.sv](rtl/togawa.sv) | Executes TOGA, WA, and HALT; data words use byte SPI transactions. |
 | SRAM and instruction buffer | [rtl/cache.sv](rtl/cache.sv) | Holds a 16-instruction window and refills it with byte requests. |
 | SPI arbiter | [rtl/spi_arbiter.sv](rtl/spi_arbiter.sv) | Shares a downstream memory between two requesters and buffers response pulses. |
 | SPI master | [rtl/spi_master.sv](rtl/spi_master.sv) | Production serial-transfer module; unit tests use the shared ideal SPI RAM model. |
 | Interfaces and static settings | [rtl/config_pkg.sv](rtl/config_pkg.sv) | Defines the SPI interface, data width, and project clock. |
-| Current hardware example | [rtl/top_module.sv](rtl/top_module.sv), [rtl/main_module.sv](rtl/main_module.sv) | Connects the alphabet generator to Taxi UART. |
+| Integrated CPU | [rtl/top_module.sv](rtl/top_module.sv), [rtl/main_module.sv](rtl/main_module.sv) | Connects pipeline instruction requests to IRAM; pipeline data and IRAM refills share the arbiter and real SPI master. |
 
-The CPU, instruction buffer, and arbiter have separate verification wrappers;
-they are not yet assembled into a complete CPU top. A complete data-cache RTL
-implementation is also pending.
+The pipeline transfers 16-bit data words as two little-endian SPI byte
+transactions. IRAM and the arbiter retain their component verification
+wrappers. The standalone ideal-memory pipeline tests have been removed;
+integrated CPU DV is deferred until a serial SPI memory model is available.
 
 ## Development and verification
 
@@ -211,10 +211,8 @@ Run commands from the repository root:
 ```bash
 make prepare             # Render RTL and generate the unit-test manifest
 make lint                # Lint the default top-level design
+make test-cocotb          # Build the integrated top; program test is currently skipped
 make unit-test           # Run all registered module tests and generate coverage
-make compile             # Compile the SystemVerilog UART testbench
-make test                # Run that testbench and ideal-memory checks
-make test-cocotb          # Run the top-level UART cocotb test
 make help                # List available targets
 ```
 
@@ -222,15 +220,19 @@ make help                # List available targets
 running the CPU-component tests. Individual unit-test DUTs and their dependencies
 are compiled by `make unit-test`.
 
+`make test-cocotb` defaults to `dv/cocotb_benches/top_module.py`. Its program
+test is a skipped stub pending a serial SPI memory model, so this target checks
+the build and bench discovery without validating integrated execution.
+
 ### Test registration and models
 
 RTL templates register cocotb tests through Jinja's `do` extension:
 
 ```jinja
 {% do unit_test(
-    module_name = "main_module",
+    module_name = "iram_blk",
     test_framework = "cocotb",
-    test_path = "dv/cocotb_benches/main_module_tb.py",
+    test_path = "dv/cocotb_benches/iram_tb.py",
     use_wrapper = true) %}
 ```
 
@@ -243,20 +245,18 @@ compiles the files under `dv/cocotb_wrappers/`, including shared simulation
 models; it selects only the registered DUT for that run. Optional
 `rtl_dependencies=["helper.sv"]` entries add rendered RTL dependencies.
 
-The CPU tests use [cpp/ideal_mem.cpp](cpp/ideal_mem.cpp) through DPI. Each memory
-handle has its own configured data width; instruction/data SRAM models use
-16 bits and the shared [ideal SPI RAM](dv/cocotb_wrappers/ideal_spi_ram.sv) uses
-8 bits. IRAM and arbiter tests exercise memory transactions through this model,
-without serial SPI timing or a Python SPI-slave emulator. C++ sources under
-`cpp/` are automatically included in the cocotb/Verilator build.
+The component tests use [cpp/ideal_mem.cpp](cpp/ideal_mem.cpp) through DPI.
+The shared [ideal SPI RAM](dv/cocotb_wrappers/ideal_spi_ram.sv) uses an 8-bit
+memory handle. IRAM and arbiter tests exercise byte transactions through this
+model without serial SPI timing. C++ sources under `cpp/` are automatically
+included in the cocotb/Verilator build.
 
-The registered suites cover:
+The 21 registered cases cover:
 
-- CPU execution, branches, write-back, and carry/overflow programs.
 - IRAM reset, fills, 16- and 64-instruction streams, jumps, boundaries,
   wraparound, response backpressure, and redirects during refill.
-- Arbiter contention, response buffering, shared memory, and reset cancellation.
-- Alphabet-generator wraparound and backpressure.
+- Arbiter reset, individual and overlapping requests, simultaneous contention,
+  response buffering, shared memory, and reset cancellation.
 
 ### Results, waveforms, and coverage
 
@@ -299,11 +299,8 @@ working display; tests and coverage generation can run without one.
 - [rtl/rtl.flist](rtl/rtl.flist) is the canonical source manifest for the default
   design. Add sources needed by that design there, keeping interfaces/packages
   ahead of their users. Module-level tests may register additional dependencies.
-- [rtl/config_pkg.sv](rtl/config_pkg.sv) holds project-owned settings, including
-  the 48 MHz clock. [rtl/config.json](rtl/config.json) selects third-party
-  integrations such as `UART0.ENABLE`, baud rate, and Taxi parameters.
-- Keep `UART0.ENABLE=true` for the supplied UART tests. Disabling it renders an
-  idle transmit pin and applies backpressure to the alphabet generator.
+- [rtl/config_pkg.sv](rtl/config_pkg.sv) defines the SPI interface and static
+  settings. [rtl/config.json](rtl/config.json) selects rendering options.
 - After pulling changes, run `git submodule update --init --recursive` and
   rerun `make setup` if `requirements.txt` changed. Run relevant unit tests before
   sharing an RTL change; include the suite release and failing test name when
@@ -314,52 +311,17 @@ working display; tests and coverage generation can run without one.
 
 ## Optional synthesis and hardware flows
 
-These flows currently target the UART example. Start with simulation before
-installing optional board-programming or physical-design tools.
-
-### Generic synthesis and FPGA checks
+Generic synthesis targets the integrated CPU:
 
 ```bash
 make synth                   # Generic Yosys/Slang netlist
-make test-gls                # Generic post-synthesis UART test
-make icebreaker-bitstream    # iCEBreaker synthesis, place-and-route, bitstream
-make test-icebreaker-gls      # iCE40-mapped UART test
-make check-vivado-sources    # Syntax-check the Basys 3 source set
-make check                   # All open-source checks above, plus RTL tests
+make check                   # Toolchain, lint, component tests, synthesis
 ```
 
-The iCEBreaker flow generates a PLL for the board's 12 MHz input and the
-project's 48 MHz clock using `icepll`. Its post-synthesis simulation bypasses the
-PLL because the open-source primitive model does not simulate PLL behavior.
-
-To program an attached iCEBreaker:
-
-```bash
-make program-icebreaker      # Volatile SRAM programming
-make flash-icebreaker        # Nonvolatile flash programming
-```
-
-Programming uses openFPGALoader. Configure USB/udev access for your board;
-programming is not part of `make check`.
-
-### Basys 3
-
-Install Vivado separately and put `vivado` on `PATH` for implementation:
-
-```bash
-make vivado-bitstream
-make program-basys3
-```
-
-Vivado creates the 48 MHz clock IP and writes its project/bitstream under
-`synth/vivado_basys3/build/`. Programming uses openFPGALoader.
-After programming either board, monitor UART with:
-
-```bash
-venv/bin/python3 read-uart.py --port /dev/ttyUSB0 --baud 115200
-```
-
-Adjust the device path for your system.
+The existing iCEBreaker and Basys 3 board wrappers and constraints still use the
+retired UART pin interface. Their optional build/programming targets need a
+separate migration to selected SPI pins before use. Board programming and
+integrated hardware execution have not been validated.
 
 ### OpenROAD
 
@@ -380,7 +342,7 @@ make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
 ```
 
 Stopping goals include `synth`, `floorplan`, `place`, `cts`, `route`, `finish`,
-and `all`. The example uses Nangate45 and the constraints in
+and `all`. The flow uses Nangate45 and the constraints in
 `openroad/top_module.sdc`. Logs, reports, and implementation results live under
 `openroad/output/`. Reporting defaults to `QT_QPA_PLATFORM=offscreen` for use
 over SSH; interactive GUI targets require a working display and
@@ -393,10 +355,10 @@ Restore `RENDER_OPTION.SYNTH=false` before cocotb tests. OpenROAD is not part of
 
 | Path | Purpose |
 | --- | --- |
-| `rtl/` | CPU components, UART example, configuration, and source manifest |
+| `rtl/` | Integrated CPU, components, configuration, and source manifest |
 | `dv/cocotb_benches/` | Python verification suites and helpers |
 | `dv/cocotb_wrappers/` | Unit-test tops and shared ideal SPI RAM |
-| `dv/` | SystemVerilog testbench and simulation source list |
+| `dv/` | Component cocotb tests and simulation wrappers |
 | `cpp/` | DPI ideal-memory implementation |
 | `misc/` | RTL renderer and unit-test runner |
 | `lint/` | Verilator lint configuration |

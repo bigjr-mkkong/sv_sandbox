@@ -108,12 +108,7 @@ module iram_blk #(
     output logic              rsp_val_o,
     output logic [DATA_W-1:0] inst_o,
     input  logic              rsp_rdy_i,
-
-    output logic              iram_val_o,
-    output logic [15:0]       iram_new_pc_o,
-    input  logic              spi_rdy_i,
-    input  logic              spi_val_i,
-    input  logic [7:0]        spi_data_i
+    spi_ram_if.if_src         spi_o
 );
 
     localparam int unsigned INDEX_W = (DEPTH <= 1) ? 1 : $clog2(DEPTH);
@@ -137,7 +132,9 @@ module iram_blk #(
     logic iram_window_valid_q, iram_window_valid_d;
 
     // Convert the word PC to a byte address in the 64 KiB SPI address space.
-    assign iram_new_pc_o = 16'({ADDR_W'(req_pc_q + ADDR_W'(addr_ofst_q)), byte_q});
+    assign spi_o.req_addr = 16'({ADDR_W'(req_pc_q + ADDR_W'(addr_ofst_q)), byte_q});
+    assign spi_o.req_we = 1'b0;
+    assign spi_o.req_wdata = '0;
 
     sram_blk #(
         .DATA_W(DATA_W),
@@ -150,7 +147,7 @@ module iram_blk #(
         .req_rdy_o(sram_req_rdy),
         .req_is_write_i(sram_is_write),
         .req_addr_i(sram_addr),
-        .req_data_i({spi_data_i, sram_refill_data_q}),
+        .req_data_i({spi_o.rsp_rdata, sram_refill_data_q}),
         .rsp_val_o(sram_rsp_val),
         .rsp_rdy_i(sram_rsp_rdy),
         .rsp_data_o(inst_o)
@@ -167,7 +164,8 @@ module iram_blk #(
 
         req_rdy_o = 1'b0;
         rsp_val_o = 1'b0;
-        iram_val_o = 1'b0;
+        spi_o.req_val = 1'b0;
+        spi_o.rsp_rdy = 1'b0;
         sram_req_val = 1'b0;
         sram_is_write = 1'b0;
         sram_addr = INDEX_W'(pc_i - iram_window_begin_q);
@@ -208,21 +206,22 @@ module iram_blk #(
                 end
 
                 MISS_REQUEST: begin
-                    iram_val_o = 1'b1;
-                    if (spi_rdy_i)
+                    spi_o.req_val = 1'b1;
+                    if (spi_o.req_rdy)
                         state_d = MISS_REFILL;
                 end
 
                 MISS_REFILL: begin
+                    spi_o.rsp_rdy = !iram_window_valid_q && (!byte_q || sram_req_rdy);
                     if (iram_window_valid_q) begin
                         // Drain the last write acknowledgement while reading the requested word.
                         sram_req_val = 1'b1;
                         sram_addr = '0;
                         if (sram_req_rdy)
                             state_d = RESP_PIPELINE;
-                    end else if (spi_val_i) begin
+                    end else if (spi_o.rsp_val && spi_o.rsp_rdy) begin
                         if (!byte_q) begin
-                            sram_refill_data_d = spi_data_i;
+                            sram_refill_data_d = spi_o.rsp_rdata;
                             byte_d = 1'b1;
                             state_d = MISS_REQUEST;
                         end else begin

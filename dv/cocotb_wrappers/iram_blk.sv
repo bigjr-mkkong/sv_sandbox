@@ -19,7 +19,12 @@ module iram_blk_unit_test (
     output logic spi_rdy_o,
     output logic spi_val_o
 );
-    logic [7:0] spi_data;
+    spi_ram_if iram_spi();
+
+    assign iram_val_o = iram_spi.req_val;
+    assign iram_new_pc_o = iram_spi.req_addr;
+    assign iram_spi.req_rdy = spi_rdy_o;
+    assign iram_spi.rsp_val = spi_val_o;
 
     iram_blk iram (
         .clk_i(clk_i),
@@ -30,11 +35,7 @@ module iram_blk_unit_test (
         .rsp_val_o(rsp_val_o),
         .inst_o(inst_o),
         .rsp_rdy_i(rsp_rdy_i),
-        .iram_val_o(iram_val_o),
-        .iram_new_pc_o(iram_new_pc_o),
-        .spi_rdy_i(spi_rdy_o),
-        .spi_val_i(spi_val_o),
-        .spi_data_i(spi_data)
+        .spi_o(iram_spi)
     );
 
     // Preload through the same memory port while IRAM is held in reset.
@@ -43,11 +44,11 @@ module iram_blk_unit_test (
         .rst_ni(rst_ni),
         .req_val(run_i ? iram_val_o : mem_write_i),
         .req_rdy(spi_rdy_o),
-        .req_we(!run_i),
+        .req_we(run_i ? iram_spi.req_we : 1'b1),
         .req_addr(run_i ? iram_new_pc_o : mem_addr_i),
-        .req_wdata(mem_data_i),
+        .req_wdata(run_i ? iram_spi.req_wdata : mem_data_i),
         .resp_val(spi_val_o),
-        .resp_rdata(spi_data)
+        .resp_rdata(iram_spi.rsp_rdata)
     );
 endmodule
 /* verilator lint_on DECLFILENAME */

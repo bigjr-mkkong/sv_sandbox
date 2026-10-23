@@ -9,7 +9,7 @@ redirect, and reset-during-refill coverage.
 import cocotb
 from cocotb.triggers import RisingEdge, Timer
 
-from dv.cocotb_benches.togawa_tb import tick
+from dv.cocotb_benches.clock import tick
 
 
 WINDOW_WORDS = 16
@@ -33,16 +33,25 @@ def assert_window(dut, start):
 
 async def monitor_reads(dut, reads):
     held_address = None
+    pending = False
     while True:
         await RisingEdge(dut.clk_i)
         if not dut.rst_ni.value or not dut.run_i.value:
             held_address = None
+            pending = False
             continue
         address = int(dut.iram_new_pc_o.value)
+        if dut.iram_val_o.value:
+            assert not dut.iram_spi.req_we.value
+            assert int(dut.iram_spi.req_wdata.value) == 0
+        if pending and dut.spi_val_o.value:
+            assert dut.iram_spi.rsp_rdy.value, "IRAM missed the byte response"
+            pending = False
         if held_address is not None:
             assert dut.iram_val_o.value and address == held_address
         if dut.iram_val_o.value and dut.spi_rdy_o.value:
             reads.append(address)
+            pending = True
         held_address = address if dut.iram_val_o.value and not dut.spi_rdy_o.value else None
 
 
