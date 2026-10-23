@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run every RTL unit test registered in build/.unit-test.json."""
+"""Run registered RTL unit tests from build/.unit-test.json."""
 
 import argparse
 import json
@@ -273,6 +273,7 @@ def main() -> int:
     parser.add_argument("--build-dir", type=Path, default=Path("build/unit-test"))
     parser.add_argument("--cocotb-makefile", type=Path, default=Path("Makefile.cocotb"))
     parser.add_argument("--sim", default="verilator")
+    parser.add_argument("--module", help="Run only this registered module")
     args = parser.parse_args()
 
     manifest_path = project_path(project_root, args.manifest)
@@ -283,6 +284,10 @@ def main() -> int:
 
     try:
         entries = load_manifest(manifest_path)
+        if args.module:
+            entries = [entry for entry in entries if entry["module_name"] == args.module]
+            if not entries:
+                raise UnitTestError(f"no unit test registered for module: {args.module}")
         if not entries:
             print("No RTL unit tests are registered.")
             return 0

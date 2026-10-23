@@ -20,7 +20,6 @@ PYTHON ?= python3
 endif
 
 TOP := top_module
-COCOTB_TEST_MODULES ?= dv.cocotb_benches.top_module
 
 RTL_MANIFEST := rtl/rtl.flist
 RTL_INPUTS := $(shell sed -e 's,//.*,,' -e '/^[[:space:]]*$$/d' $(RTL_MANIFEST))
@@ -62,7 +61,7 @@ help:
 	@echo "  make setup                 Create venv and install Python tools"
 	@echo "  make doctor                Check the local toolchain and submodules"
 	@echo "  make lint                  Lint the rendered RTL with Verilator"
-	@echo "  make test-cocotb           Run the top-module cocotb bench (currently a stub)"
+	@echo "  make test-cocotb           Run the registered top-module unit test"
 	@echo "  make unit-test             Run registered RTL unit tests"
 	@echo "  make synth                 Build a generic Yosys netlist"
 	@echo "  make orfs DEFAULT_GOAL=<choice>  Run optional Docker-backed OpenROAD flow"
@@ -107,19 +106,12 @@ define check_simulation_config
 @$(PYTHON) -c 'import json, sys; synth = json.load(open("rtl/config.json")).get("RENDER_OPTION", {}).get("SYNTH", False); sys.exit("\n############################################################\n# SYNTH ON: simulation disabled. Set RENDER_OPTION.SYNTH=false.\n############################################################" if synth else 0)'
 endef
 
-test-cocotb: $(RTL_STAMP) $(RTL_SOURCES) $(RTL_HEADERS) Makefile.cocotb dv/cocotb_benches/top_module.py
-	$(check_simulation_config)
-	$(MAKE) -f Makefile.cocotb \
-		SIM_BUILD=build/cocotb-rtl \
-		COCOTB_RESULTS_FILE=$(abspath build/cocotb-rtl/results.xml) \
-		USER_SIM_ARGS="--trace-file $(abspath build/cocotb-rtl/dump.vcd)" \
-		VERILOG_SOURCES="$(RTL_SOURCES)" \
-		COCOTB_TOPLEVEL=$(TOP) \
-		COCOTB_TEST_MODULES=$(COCOTB_TEST_MODULES)
+test-cocotb:
+	$(MAKE) unit-test UNIT_TEST_MODULE=top_module
 
 unit-test: $(UNIT_TEST_MANIFEST) misc/unit-test.py Makefile.cocotb
 	$(check_simulation_config)
-	$(PYTHON) misc/unit-test.py --manifest $(UNIT_TEST_MANIFEST) --rtl-dir build/rtl
+	$(PYTHON) misc/unit-test.py --manifest $(UNIT_TEST_MANIFEST) --rtl-dir build/rtl $(if $(UNIT_TEST_MODULE),--module $(UNIT_TEST_MODULE))
 
 $(YOSYS_NETLIST): $(RTL_STAMP) $(RTL_SOURCES) $(RTL_HEADERS) synth/yosys_generic/yosys.tcl
 	@mkdir -p $(dir $@)

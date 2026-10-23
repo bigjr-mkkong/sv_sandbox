@@ -6,9 +6,9 @@ and optional synthesis and FPGA flows.
 
 `top_module` exposes the integrated CPU's SPI pins and HALT output.
 `main_module` connects the pipeline to IRAM, shares one SPI master through the
-arbiter, and uses the real serial master. Integrated execution tests await a
-SPI memory verification model; existing tests cover IRAM, the arbiter, and the
-shared ideal-memory model.
+arbiter, and uses the real serial master. Integrated tests run small programs
+against the supplied single-byte SPI RAM model. Component tests cover IRAM and
+the arbiter separately with the ideal-memory model.
 
 ## Installation and prerequisites
 
@@ -163,11 +163,11 @@ make unit-test
 ```
 
 - `make lint` renders and lints the current top-level source set.
-- `make unit-test` runs the registered IRAM and SPI-arbiter tests, then
+- `make unit-test` runs the registered IRAM, SPI-arbiter, and integrated CPU tests, then
   generates annotated Verilator coverage.
 
-These checks do not execute programs on the integrated CPU or verify serial
-SPI memory behavior. Running `make` with no target only prints help.
+The serial model checks functional byte transfers, without validating real
+memory timing or sequential bursts. Running `make` with no target prints help.
 
 ### Troubleshooting setup
 
@@ -195,14 +195,16 @@ The implementation and integration are still in progress.
 | CPU pipeline | [rtl/togawa.sv](rtl/togawa.sv) | Executes TOGA, WA, and HALT; data words use byte SPI transactions. |
 | SRAM and instruction buffer | [rtl/cache.sv](rtl/cache.sv) | Holds a 16-instruction window and refills it with byte requests. |
 | SPI arbiter | [rtl/spi_arbiter.sv](rtl/spi_arbiter.sv) | Shares a downstream memory between two requesters and buffers response pulses. |
-| SPI master | [rtl/spi_master.sv](rtl/spi_master.sv) | Production serial-transfer module; unit tests use the shared ideal SPI RAM model. |
+| SPI master | [rtl/spi_master.sv](rtl/spi_master.sv) | Real serial-transfer module used by integrated CPU tests. |
 | Interfaces and static settings | [rtl/config_pkg.sv](rtl/config_pkg.sv) | Defines the SPI interface, data width, and project clock. |
 | Integrated CPU | [rtl/top_module.sv](rtl/top_module.sv), [rtl/main_module.sv](rtl/main_module.sv) | Connects pipeline instruction requests to IRAM; pipeline data and IRAM refills share the arbiter and real SPI master. |
 
 The pipeline transfers 16-bit data words as two little-endian SPI byte
 transactions. IRAM and the arbiter retain their component verification
-wrappers. The standalone ideal-memory pipeline tests have been removed;
-integrated CPU DV is deferred until a serial SPI memory model is available.
+wrappers. Integrated tests connect the real master to
+[spi_ram_model.sv](dv/cocotb_wrappers/spi_ram_model.sv). Its source and limitations
+are recorded in the model: single-byte transfers only, intended for functional
+pipeline verification rather than physical SPI memory timing.
 
 ## Development and verification
 
@@ -211,7 +213,7 @@ Run commands from the repository root:
 ```bash
 make prepare             # Render RTL and generate the unit-test manifest
 make lint                # Lint the default top-level design
-make test-cocotb          # Build the integrated top; program test is currently skipped
+make test-cocotb          # Run the registered integrated CPU tests
 make unit-test           # Run all registered module tests and generate coverage
 make help                # List available targets
 ```
@@ -220,9 +222,11 @@ make help                # List available targets
 running the CPU-component tests. Individual unit-test DUTs and their dependencies
 are compiled by `make unit-test`.
 
-`make test-cocotb` defaults to `dv/cocotb_benches/top_module.py`. Its program
-test is a skipped stub pending a serial SPI memory model, so this target checks
-the build and bench discovery without validating integrated execution.
+`make test-cocotb` delegates to `make unit-test UNIT_TEST_MODULE=top_module`.
+The top is registered like every other unit-test module, using
+`dv/cocotb_wrappers/top_module.sv` and `dv/cocotb_benches/top_module.py`.
+`UNIT_TEST_MODULE=<name>` selects any one registered module; omitting it runs
+all modules. An unknown module name is an error.
 
 ### Test registration and models
 
@@ -251,12 +255,32 @@ memory handle. IRAM and arbiter tests exercise byte transactions through this
 model without serial SPI timing. C++ sources under `cpp/` are automatically
 included in the cocotb/Verilator build.
 
-The 21 registered cases cover:
+The integrated wrapper exposes the serial RAM's byte array as `dut.ram.mem`.
+[simp_spi_ram_helper.py](dv/cocotb_benches/simp_spi_ram_helper.py) provides generic
+byte-range helpers:
+
+```python
+await write_memory(dut.ram.mem, address, [0xAA, 0xBB, 0xCC])
+assert read_memory(dut.ram.mem, address, 3) == [0xAA, 0xBB, 0xCC]
+```
+
+The interface accepts and returns lists of byte values; byte conversion and
+validation happen inside the helper. Addresses are byte addresses and the
+entire range is checked before access.
+`write_memory` waits for cocotb's scheduled writes to commit. Hold the CPU in
+reset while preloading; inspect results after HALT. Split instruction/data
+words into little-endian byte lists with `[word & 0xFF, word >> 8]`.
+Each top-level test clears RAM explicitly;
+the serial model has no reset input, so CPU reset alone preserves its memory.
+
+The 24 registered cases cover:
 
 - IRAM reset, fills, 16- and 64-instruction streams, jumps, boundaries,
   wraparound, response backpressure, and redirects during refill.
 - Arbiter reset, individual and overlapping requests, simultaneous contention,
   response buffering, shared memory, and reset cancellation.
+- Integrated memory access and bounds, WA/TOGA/HALT programs with serial
+  write-back, and a branch across IRAM windows that requires another refill.
 
 ### Results, waveforms, and coverage
 

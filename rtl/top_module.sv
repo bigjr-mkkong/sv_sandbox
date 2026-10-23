@@ -1,5 +1,10 @@
 `timescale 1ns / 1ps
 
+{% do unit_test(
+    module_name = "top_module",
+    test_framework = "cocotb",
+    use_wrapper = true,
+    test_path = "dv/cocotb_benches/top_module.py") %}
 module top_module (
     input  logic clk_i,
     input  logic rst_ni,
