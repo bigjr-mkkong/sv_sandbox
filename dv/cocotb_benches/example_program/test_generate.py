@@ -107,7 +107,7 @@ class AssemblerTest(unittest.TestCase):
         )
         for name, a, b, steps in cases:
             with self.subTest(name=name, a=a, b=b, steps=steps):
-                p, initial, expected = make_benchmark(name, a, b, steps)
+                p, initial, expected = make_benchmark(name, a=a, b=b, steps=steps)
                 memory = execute(p, initial)
                 for address, value in expected.items():
                     self.assertEqual(memory[address], value)
@@ -143,7 +143,14 @@ class AssemblerTest(unittest.TestCase):
     def test_invalid_benchmark(self):
         for name, a, b, steps in (("unknown", 0, 0, 0), ("adder", -1, 0, 0), ("gcd", 0, 256, 0), ("lfsr", 0, 0, -1)):
             with self.subTest(name=name, a=a, b=b, steps=steps), self.assertRaises(ValueError):
-                make_benchmark(name, a, b, steps)
+                make_benchmark(name, a=a, b=b, steps=steps)
+
+    def test_missing_benchmark_inputs(self):
+        cases = [(name, {}) for name in BENCHMARKS]
+        cases.extend((name, {"a": 255}) for name in ("adder", "gcd", "lfsr"))
+        for name, inputs in cases:
+            with self.subTest(name=name, inputs=inputs), self.assertRaises(ValueError):
+                make_benchmark(name, **inputs)
 
 
 if __name__ == "__main__":

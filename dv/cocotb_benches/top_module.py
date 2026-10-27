@@ -4,7 +4,7 @@ from pathlib import Path
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, ReadOnly, RisingEdge, Timer, with_timeout
+from cocotb.triggers import ClockCycles, FallingEdge, ReadOnly, RisingEdge, Timer, with_timeout
 
 from dv.cocotb_benches.simp_spi_ram_helper import read_memory, write_memory
 
@@ -138,6 +138,51 @@ def backward_branch_limits_post_check(dut):
     assert int(pipeline.pc_q.value) == 6
     assert int(pipeline.reg_q.value) == 0
     check_benchmark_words(dut, {0x4000: 0x00})
+
+
+@cocotb.test(timeout_time=2, timeout_unit="ms")
+async def asynchronous_reset_pulse(dut):
+    await prog_exec(dut, Path(__file__).with_name("example_program") / "basic_wa.hex")
+    cpu = dut.cpu.main_module_inst
+    assert cpu.iram.iram_window_valid_q.value
+
+    # A pulse entirely between rising edges must still reset every CPU block.
+    await FallingEdge(dut.clk_i)
+    await Timer(1, unit="ns")
+    dut.rst_ni.value = 0
+    await Timer(1, unit="ns")
+    assert not dut.cpu.rst_sync_ni.value
+    assert not cpu.pipeline.rst_ni.value
+    assert not cpu.iram.rst_ni.value
+    assert not cpu.iram.sram_blk_inst.rst_ni.value
+    assert not cpu.arbiter.rst_ni.value
+    assert cpu.spi.rst.value
+    dut.rst_ni.value = 1
+    await Timer(1, unit="ns")
+    assert not dut.clk_i.value
+    assert not dut.cpu.rst_sync_ni.value
+
+    await RisingEdge(dut.clk_i)
+    await Timer(1, unit="ns")
+    assert not dut.cpu.rst_sync_ni.value
+    assert not cpu.pipeline.pc_q.value
+    assert not cpu.pipeline.reg_q.value
+    assert not dut.halt_o.value
+    assert not cpu.iram.iram_window_valid_q.value
+    assert int(cpu.iram.sram_blk_inst.state_q.value) == 0
+    assert int(cpu.arbiter.state_q.value) == 0
+    assert int(cpu.spi.state.value) == 0
+    assert dut.spi_cs_n.value
+
+    await RisingEdge(dut.clk_i)
+    await Timer(1, unit="ns")
+    assert dut.cpu.rst_sync_ni.value
+    assert not cpu.pipeline.pc_q.value
+    assert not dut.halt_o.value
+    await with_timeout(RisingEdge(dut.halt_o), 2, "ms")
+    await Timer(1, unit="ns")
+    assert dut.spi_cs_n.value
+    basic_wa_post_check(dut)
 
 
 @cocotb.test(timeout_time=1, timeout_unit="ms")

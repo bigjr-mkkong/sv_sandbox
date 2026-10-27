@@ -201,11 +201,25 @@ class Program:
         Path(path).write_text("\n".join(lines) + "\n", encoding="ascii")
 
 
-def make_benchmark(name, a=13, b=7, steps=8):
-    """Build the gem5 benchmarks with 8-bit arithmetic in 16-bit data words."""
+def make_benchmark(name, *, a=None, b=None, steps=None):
+    """Build a benchmark with explicit named inputs and 8-bit arithmetic.
+
+    Incrementer needs a; adder/GCD need a and b; Fibonacci needs steps;
+    LFSR needs a and steps. Generated program inputs are in BOUNDARY_INPUTS.
+    """
     if name not in BENCHMARKS:
         raise ValueError(f"Unknown benchmark: {name}")
-    if any(not isinstance(value, int) or not 0 <= value <= 255 for value in (a, b, steps)):
+    required = {
+        "incrementer": (a,),
+        "adder": (a, b),
+        "fibonacci": (steps,),
+        "gcd": (a, b),
+        "lfsr": (a, steps),
+    }[name]
+    if any(value is None for value in required):
+        raise ValueError(f"Explicit inputs are required for {name}")
+    if any(not isinstance(value, int) or not 0 <= value <= 255
+           for value in (a, b, steps) if value is not None):
         raise ValueError("Inputs and step count must be in 0..255")
     p = Program()
     if name == "incrementer":

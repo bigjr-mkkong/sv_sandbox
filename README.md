@@ -287,6 +287,8 @@ These text files use `@` byte addresses and little-endian hex bytes for code
 and initial data. The bench's `prog_exec` loads each file, waits for HALT, and
 calls its `<program_name>_post_check` to verify the expected final state.
 The benchmark data starts at byte address `0x4000`, separate from instructions.
+`BOUNDARY_INPUTS` in the generator lists the benchmark inputs below.
+`make_benchmark` requires explicit named inputs; it has no sample input defaults.
 They perform 8-bit arithmetic modulo 256 in aligned 16-bit words; post-checks
 also verify the upper byte is zero and preserved inputs remain unchanged.
 

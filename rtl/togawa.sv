@@ -156,3 +156,22 @@ module togawa_pipeline (
     end
 
 endmodule
+
+module reset_sync (
+    input  logic clk_i,
+    input  logic rst_ni,
+    output logic rst_sync_ni
+);
+
+    logic [1:0] sync_q;
+
+    always_ff @(posedge clk_i or negedge rst_ni) begin
+        if (!rst_ni)
+            sync_q <= 2'b00;
+        else
+            sync_q <= {sync_q[0], 1'b1};
+    end
+
+    assign rst_sync_ni = sync_q[1];
+
+endmodule

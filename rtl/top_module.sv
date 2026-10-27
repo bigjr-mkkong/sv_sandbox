@@ -14,9 +14,17 @@ module top_module (
     input  logic spi_miso_i,
     output logic halt_o
 );
-    main_module main_module_inst (
+    logic rst_sync_ni;
+
+    reset_sync reset_sync_inst (
         .clk_i(clk_i),
         .rst_ni(rst_ni),
+        .rst_sync_ni(rst_sync_ni)
+    );
+
+    main_module main_module_inst (
+        .clk_i(clk_i),
+        .rst_ni(rst_sync_ni),
         .spi_cs_no(spi_cs_no),
         .spi_sclk_o(spi_sclk_o),
         .spi_mosi_o(spi_mosi_o),
