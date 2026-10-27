@@ -185,7 +185,8 @@ memory timing or sequential bursts. Running `make` with no target prints help.
 
 ## Current CPU project
 
-TOGAWA is a small 16-bit CPU with two stages, IF and IDEXMEM. TOGA toggles a
+TOGAWA uses 16-bit instructions and a 64-bit working register, with two stages,
+IF and IDEXMEM. TOGA toggles a
 working-register bit and conditionally branches. WA writes back a dirty working
 word and loads another word; HALT completes pending write-back before stopping.
 The implementation and integration are still in progress.
@@ -199,12 +200,25 @@ The implementation and integration are still in progress.
 | Interfaces and static settings | [rtl/config_pkg.sv](rtl/config_pkg.sv) | Defines the SPI interface, data width, and project clock. |
 | Integrated CPU | [rtl/top_module.sv](rtl/top_module.sv), [rtl/main_module.sv](rtl/main_module.sv) | Connects pipeline instruction requests to IRAM; pipeline data and IRAM refills share the arbiter and real SPI master. |
 
-The pipeline transfers 16-bit data words as two little-endian SPI byte
+The pipeline transfers 64-bit data words as eight little-endian SPI byte
 transactions. IRAM and the arbiter retain their component verification
 wrappers. Integrated tests connect the real master to
 [spi_ram_model.sv](dv/cocotb_wrappers/spi_ram_model.sv). Its source and limitations
 are recorded in the model: single-byte transfers only, intended for functional
 pipeline verification rather than physical SPI memory timing.
+
+| Instruction | Encoding | Operation |
+| --- | --- | --- |
+| TOGA | `0`, bit index `[14:9]`, signed displacement `[8:0]` | Toggle bit 0..63; branch relative to the next word PC if the bit becomes zero. |
+| WA-direct | `10`, word index `[13:0]` | Write back dirty data, then load from `index << 3`. |
+| WA-indirect | `11`, unused `[13:0]` | Write back dirty data, then load from the old working-register value shifted left by three. |
+| HALT | `0x0000` | Stop after all dirty bytes are acknowledged. |
+
+Addresses wrap to the 16-bit SPI bus: only the low 13 index bits address memory.
+`Program.wa(address)` takes an eight-byte-aligned byte address in `0..0xFFF8`;
+`Program.wa_indirect()` emits `0xC000`. Loads commit the register and its address
+only after the eighth response. Memory writes commit one byte at a time.
+This ISA is incompatible with the old 16-bit-register images; regenerate programs.
 
 ## Development and verification
 
@@ -268,8 +282,10 @@ The interface accepts and returns lists of byte values; byte conversion and
 validation happen inside the helper. Addresses are byte addresses and the
 entire range is checked before access.
 `write_memory` waits for cocotb's scheduled writes to commit. Hold the CPU in
-reset while preloading; inspect results after HALT. Split instruction/data
-words into little-endian byte lists with `[word & 0xFF, word >> 8]`.
+reset while preloading; inspect results after HALT. Pack
+16-bit instructions/variables into little-endian byte lists with
+`[word & 0xFF, word >> 8]`; use `list(value.to_bytes(8, "little"))` for a
+complete 64-bit register value.
 Each top-level test clears RAM explicitly;
 the serial model has no reset input, so CPU reset alone preserves its memory.
 
@@ -289,8 +305,10 @@ calls its `<program_name>_post_check` to verify the expected final state.
 The benchmark data starts at byte address `0x4000`, separate from instructions.
 `BOUNDARY_INPUTS` in the generator lists the benchmark inputs below.
 `make_benchmark` requires explicit named inputs; it has no sample input defaults.
-They perform 8-bit arithmetic modulo 256 in aligned 16-bit words; post-checks
-also verify the upper byte is zero and preserved inputs remain unchanged.
+They perform 8-bit arithmetic modulo 256 in 16-bit variables packed into aligned
+64-bit words. The benchmark builder removes redundant WA instructions and routes
+distant branches through intermediate jumps. Post-checks verify all bytes of the
+affected words, including unused bits and preserved inputs.
 
 | Benchmark | Boundary calculation | Result |
 | --- | --- | --- |
@@ -302,11 +320,12 @@ also verify the upper byte is zero and preserved inputs remain unchanged.
 | LFSR | Seed 255, 255 steps; polynomial mask `0xB8` | 255 |
 
 GCD uses 255 as the maximum one-byte input; 256 needs nine bits. A passive
-monitor checks the sign-extended 11-bit displacement and the registered PC
+monitor checks the sign-extended 9-bit displacement and the registered PC
 for every taken branch. Loop benchmarks must take backward branches. A
-separate guarded program verifies taken offsets `-1` and `-1024` explicitly.
+separate guarded program verifies taken offsets `-1` and `-256` explicitly;
+the upper-address WA test also takes a `+255` branch using register bit 63.
 
-The 32 registered cases cover:
+The 38 registered cases cover:
 
 - IRAM reset, fills, 16- and 64-instruction streams, jumps, boundaries,
   wraparound, response backpressure, and redirects during refill.
@@ -314,6 +333,9 @@ The 32 registered cases cover:
   response buffering, shared memory, and reset cancellation.
 - Integrated memory access and bounds, basic WA, and TOGA with and without a
   taken branch, including serial write-back and the final PC.
+- Eight-byte transfers, indirect pointer chains and self-reference, address
+  truncation, upper address/bit boundaries, stable stalled requests, and reset
+  during the final load or write byte, plus the shared asynchronous reset path.
 - Incrementer, adder, Fibonacci, GCD, and LFSR programs executing through
   IRAM refills, the arbiter, and the real serial SPI master, including byte
   overflow and the backward-branch displacement limits.
