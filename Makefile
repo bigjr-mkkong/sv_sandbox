@@ -47,10 +47,16 @@ ICE_NETLIST := $(ICE_DIR)/synth.v
 ICE_JSON := $(ICE_DIR)/synth.json
 ICE_ASC := $(ICE_DIR)/icebreaker.asc
 ICE_BITSTREAM := $(ICE_DIR)/icebreaker.bit
+TANG_DIR := build/tangnano_9k
+TANG_PLL := $(TANG_DIR)/tangnano_9k_pll.v
+TANG_JSON := $(TANG_DIR)/synth.json
+TANG_ROUTED := $(TANG_DIR)/routed.json
+TANG_BITSTREAM := $(TANG_DIR)/tangnano_9k.fs
 VIVADO_BITSTREAM := synth/vivado_basys3/build/basys3/basys3.runs/impl_1/basys3.bit
 
 .PHONY: help setup doctor prepare lint test-cocotb unit-test synth yosys orfs \
 	icebreaker-pll icebreaker-synth icebreaker-bitstream \
+	tangnano-pll tangnano-synth tangnano-bitstream program-tangnano \
 	check-vivado-sources vivado-bitstream program-icebreaker flash-icebreaker program-basys3 \
 	check clean FORCE
 
@@ -69,6 +75,9 @@ help:
 	@echo "                             Configure ORFS_HOME and ORFS_IMAGE; default goal: all"
 	@echo "  make icebreaker-pll        Generate the iCEBreaker PLL source"
 	@echo "  make icebreaker-bitstream  Build the iCEBreaker bitstream"
+	@echo "  make tangnano-pll          Generate the Tang Nano 9K 27-to-48 MHz PLL"
+	@echo "  make tangnano-bitstream    Build the Tang Nano 9K CPU with PLL and external SPI RAM pins"
+	@echo "  make program-tangnano      Load the CPU into a locally attached board's SRAM"
 	@echo "  make check-vivado-sources  Syntax-check the Basys 3 source set"
 	@echo "  make vivado-bitstream      Build the Basys 3 bitstream with Vivado"
 	@echo "  make check                 Run CPU lint, component tests, and synthesis"
@@ -153,6 +162,33 @@ $(ICE_BITSTREAM): $(ICE_ASC)
 	icepack $< $@
 
 icebreaker-bitstream: $(ICE_BITSTREAM)
+
+$(TANG_PLL): Makefile
+	@mkdir -p $(dir $@)
+	gowin_pll -i 27 -o 48 -d GW1NR-LV9QN88PC6/I5 -m tangnano_9k_pll -f $@
+
+tangnano-pll: $(TANG_PLL)
+
+$(TANG_JSON): $(RTL_STAMP) $(RTL_SOURCES) $(RTL_HEADERS) \
+		$(TANG_PLL) synth/tangnano_9k/tangnano_9k.v synth/tangnano_9k/yosys.tcl
+	yosys -m slang -p 'tcl synth/tangnano_9k/yosys.tcl $(RTL_FILELIST) $(TANG_PLL) synth/tangnano_9k/tangnano_9k.v $(YOSYS_DATDIR)/gowin/cells_sim.v $@' \
+		-l $(TANG_DIR)/yosys.log
+
+tangnano-synth: $(TANG_JSON)
+
+$(TANG_ROUTED): $(TANG_JSON) synth/tangnano_9k/netpnr.cst synth/tangnano_9k/nextpnr.py Makefile
+	nextpnr-himbaechel --json $(TANG_JSON) --write $@ \
+		--device GW1NR-LV9QN88PC6/I5 --vopt family=GW1N-9C \
+		--vopt cst=synth/tangnano_9k/netpnr.cst --pre-pack synth/tangnano_9k/nextpnr.py \
+		--freq 48 --report $(TANG_DIR)/timing.json -l $(TANG_DIR)/nextpnr.log
+
+$(TANG_BITSTREAM): $(TANG_ROUTED) Makefile
+	gowin_pack -d GW1N-9C -o $@ $<
+
+tangnano-bitstream: $(TANG_BITSTREAM)
+
+program-tangnano: $(TANG_BITSTREAM)
+	openFPGALoader -b tangnano9k --freq 1000000 $<
 
 check-vivado-sources: $(RTL_STAMP) $(RTL_SOURCES) synth/vivado_basys3/basys3.sv
 	yosys -m slang -Q -p 'read_slang --lint-only --ignore-unknown-modules --top basys3 -f $(RTL_FILELIST) synth/vivado_basys3/basys3.sv'

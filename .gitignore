@@ -11,6 +11,7 @@ venv/
 results.xml
 /openroad/output/
 /dv/cocotb_benches/traces
-/dv/cocotb_benches/example_program/*.hex
+/dv/cocotb_benches/programs/*.hex
+/dv/cocotb_benches/programs/*.json
 /rtl/architecture.md
 AGENTS.md

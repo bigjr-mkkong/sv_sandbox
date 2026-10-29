@@ -1,12 +1,13 @@
-"""Run with python3 -m unittest dv.cocotb_benches.example_program.test_generate."""
+"""Run with python3 -m unittest dv.cocotb_benches.programs.test_generate."""
 
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 
-from dv.cocotb_benches.example_program.generate import (
+from dv.cocotb_benches.programs.generate import (
     A, BENCHMARKS, BOUNDARY_INPUTS, Program, make_backward_branch_limits, make_benchmark,
 )
+from dv.cocotb_benches.programs.dataset import DATA_DIR, initial_regions, load_program
 
 
 def execute(program, initial):
@@ -181,6 +182,25 @@ class AssemblerTest(unittest.TestCase):
         p, initial, expected = make_benchmark("fibonacci", steps=14)
         self.assertEqual(expected[A + 4], 377 & 0xFF)
         self.assertEqual(execute(p, initial)[A + 4], 121)
+
+    def test_benchmark_datasets_match_assembler(self):
+        for name in (*BENCHMARKS, "fibonacci_overflow"):
+            with self.subTest(name=name):
+                case = load_program(DATA_DIR / f"{name}.json")
+                benchmark = "fibonacci" if name == "fibonacci_overflow" else name
+                program, initial, expected = make_benchmark(benchmark, **case["inputs"])
+                code = b"".join(word.to_bytes(2, "little") for word in program.assemble())
+                self.assertEqual(case["code"], code)
+                memory = bytearray(65536)
+                for address, data in initial_regions(case):
+                    memory[address:address + len(data)] = data
+                for address in range(A, A + 16, 2):
+                    self.assertEqual(int.from_bytes(memory[address:address + 2], "little"),
+                                     initial.get(address, 0))
+                for block in case["postcondition"]["memory"]:
+                    memory[block["address"]:block["address"] + len(block["bytes"])] = block["bytes"]
+                for address, value in expected.items():
+                    self.assertEqual(int.from_bytes(memory[address:address + 2], "little"), value)
 
     def test_backward_branch_limits(self):
         words = make_backward_branch_limits().assemble()

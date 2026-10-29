@@ -41,8 +41,38 @@ module togawa_pipeline (
     assign load_addr = inst_q[14] ? {reg_q[12:0], 3'b000}
                                  : {inst_q[12:0], 3'b000};
     assign pc_o = pc_q;
-    assign halt = halt_q && !reg_dirty_q && spi_state_q == IDLE;
+    assign halt = halt_q;
     wire _unused_ok = &{1'b0, icache_req_rdy_i};
+
+    always_comb begin : if_stage
+        pc_d = pc_q;
+        inst_d = inst_q;
+        inst_valid_d = inst_valid_q && stall;
+
+        icache_req_val_o = !stall && !flush && !halt_d;
+        icache_rdy_o = icache_req_val_o;
+
+        if (flush) begin
+            pc_d = branch_pc;
+            inst_valid_d = 1'b0;
+        end else if (icache_val_i && icache_rdy_o) begin
+            pc_d = pc_q + 16'd1;
+            inst_d = icache_inst_i;
+            inst_valid_d = 1'b1;
+        end
+    end
+
+    always_ff @(posedge clk_i) begin : if_idexmem_rf
+        if (!rst_ni) begin
+            pc_q <= 16'd0;
+            inst_q <= 16'd0;
+            inst_valid_q <= 1'b0;
+        end else begin
+            pc_q <= pc_d;
+            inst_q <= inst_d;
+            inst_valid_q <= inst_valid_d;
+        end
+    end
 
     always_comb begin : idexmem_stage
         reg_d = reg_q;
@@ -51,6 +81,7 @@ module togawa_pipeline (
         spi_state_d = spi_state_q;
         byte_d = byte_q;
         load_low_d = load_low_q;
+        halt_d = halt_q;
 
         spi_o.req_val = 1'b0;
         spi_o.req_we = reg_dirty_q;
@@ -62,10 +93,23 @@ module togawa_pipeline (
         flush = 1'b0;
         branch_pc = pc_q;
 
-        // HALT clears stage valid but still writes back a dirty word.
-        if (rst_ni && !halt && (inst_valid_q || halt_q)) begin
-            if (inst_q[15] || inst_q == 16'h0000) begin
+        if (inst_valid_q) begin
+            if (inst_q == 16'h0000) begin //If it's HALT
+                stall = reg_dirty_q;
+                if (!reg_dirty_q)
+                    halt_d = 1'b1;
+            end else if (inst_q[15]) begin//If it's WA-x
                 stall = 1'b1;
+            end else begin//If it's TOGA
+                reg_d = reg_q ^ (64'h0000000000000001 << inst_q[14:9]);
+                reg_dirty_d = 1'b1;
+                // The old bit being one means the toggled bit is zero.
+                flush = reg_q[inst_q[14:9]] && inst_q[8:0] != 9'd0;
+                // IF already advanced PC past the executing instruction.
+                branch_pc = pc_q + { {7{inst_q[8]}}, inst_q[8:0] };
+            end
+
+            if (stall) begin
                 case (spi_state_q)
                     IDLE: begin
                         spi_o.req_val = 1'b1;
@@ -91,59 +135,15 @@ module togawa_pipeline (
                         end
                     end
                 endcase
-            end else begin
-                reg_d = reg_q ^ (64'h0000000000000001 << inst_q[14:9]);
-                reg_dirty_d = 1'b1;
-                // The old bit being one means the toggled bit is zero.
-                flush = reg_q[inst_q[14:9]] && inst_q[8:0] != 9'd0;
-                // IF already advanced PC past the executing instruction.
-                branch_pc = pc_q + { {7{inst_q[8]}}, inst_q[8:0] };
             end
         end
     end
 
-    always_comb begin : if_stage
-        inst_valid_d = inst_valid_q && stall;
-        inst_d = inst_q;
-        pc_d = pc_q;
-        halt_d = halt_q;
-
-        icache_rdy_o = rst_ni && !halt_q && !stall;
-
-        if (icache_val_i && icache_rdy_o && !flush) begin
-            inst_d = icache_inst_i;
-            inst_valid_d = 1'b1;
-            pc_d = pc_q + 16'd1;
-            if (icache_inst_i == 16'h0000) begin
-                inst_valid_d = 1'b0;
-                halt_d = 1'b1;
-            end
-        end
-
-        if (flush) begin
-            inst_valid_d = 1'b0;
-            pc_d = branch_pc;
-        end
-
-        icache_req_val_o = rst_ni && !halt_d && !stall && !flush;
-    end
-
-    always_ff @(posedge clk_i) begin : if_idexmem_rf
-        if (!rst_ni) begin
-            inst_valid_q <= 1'b0;
-            inst_q <= 16'd0;
-        end else begin
-            inst_valid_q <= inst_valid_d;
-            inst_q <= inst_d;
-        end
-    end
-
-    always_ff @(posedge clk_i) begin : state_rf
+    always_ff @(posedge clk_i) begin : idexmem_rf
         if (!rst_ni) begin
             reg_q <= 64'd0;
             reg_addr_q <= 16'd0;
             reg_dirty_q <= 1'b0;
-            pc_q <= 16'd0;
             spi_state_q <= IDLE;
             byte_q <= 3'd0;
             load_low_q <= '0;
@@ -152,7 +152,6 @@ module togawa_pipeline (
             reg_q <= reg_d;
             reg_addr_q <= reg_addr_d;
             reg_dirty_q <= reg_dirty_d;
-            pc_q <= pc_d;
             spi_state_q <= spi_state_d;
             byte_q <= byte_d;
             load_low_q <= load_low_d;

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: BSD-3-Clause
-"""Generate basic RTL programs and the five gem5 TOGAWA benchmarks.
+"""Assemble custom RTL programs and export the shared JSON dataset as hex images.
 
 Output is readmemh-style text: @byte_address followed by hex bytes. Instructions
 are little endian. WA takes an eight-byte-aligned byte address; WA-indirect uses the current
@@ -10,14 +10,12 @@ register as an eight-byte word index. TOGA selects bits 0..63 and branches by
 import math
 from pathlib import Path
 
+from dv.cocotb_benches.programs.dataset import initial_regions, load_programs
+
 
 BENCHMARKS = ("incrementer", "adder", "fibonacci", "gcd", "lfsr")
 BOUNDARY_INPUTS = {
-    "incrementer": {"a": 255},
-    "adder": {"a": 127, "b": 129},
-    "fibonacci": {"steps": 13},
-    "gcd": {"a": 255, "b": 251},
-    "lfsr": {"a": 255, "steps": 255},
+    case["name"]: case["inputs"] for case in load_programs() if case["name"] in BENCHMARKS
 }
 DATA_BASE = 0x4000
 A, B, RESULT = DATA_BASE, DATA_BASE + 2, DATA_BASE + 4
@@ -444,68 +442,15 @@ def make_backward_branch_limits():
     return p
 
 
-def generate():
-    output = Path(__file__).resolve().parent
-    p = Program()
-    p.wa(0x200)
-    p.halt()
-    p.write(output / "basic_wa.hex", 0x200, [0xA4, 0x5A, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC])
-
-    for name, low_byte in (("basic_toga_no_jump", 0xA0), ("basic_toga_jump", 0xA4)):
-        p = Program()
-        p.wa(0x200)
-        p.toga(2, "new_pc")
-        p.halt()
-        p.mark("new_pc")
-        p.halt()
-        p.write(output / f"{name}.hex", 0x200, [low_byte, 0x5A, 0x12, 0x34, 0x56, 0x78, 0x9A, 0xBC])
-
-    p = Program()
-    p.wa(0xFFF8)
-    p.toga(63, "far")
-    while len(p.code) < 257:
-        p.halt()
-    p.mark("far")
-    p.toga(16)
-    p.halt()
-    p.write(output / "wa_direct_64.hex", 0xFFF8,
-            [0x10, 0x32, 0x54, 0x76, 0x98, 0xBA, 0xDC, 0xFE])
-
-    p = Program()
-    p.wa(DATA_BASE)
-    p.toggle(0)
-    p.wa_indirect()
-    p.wa_indirect()
-    p.toga(63)
-    p.wa(0x5800)
-    p.wa_indirect()
-    p.toga(31)
-    p.halt()
-    data = [0x00] * (65536 - DATA_BASE)
-    for address, value in ((DATA_BASE, 0x8000000000000B00),
-                           (0x57F8, 0x0123456789ABCDEF),
-                           (0x5800, 0x0B00), (0x5808, 0xA55A123456781FFF),
-                           (0xFFF8, 0x5EF09ABC56781234)):
-        data[address - DATA_BASE:address - DATA_BASE + 8] = value.to_bytes(8, "little")
-    p.write(output / "wa_indirect.hex", DATA_BASE, data)
-
-    p = Program()
-    p.wa(DATA_BASE)
-    p.wa_indirect()
-    p.halt()
-    p.write(output / "wa_indirect_zero.hex", DATA_BASE,
-            [0x00, 0x20, 0xAB, 0x89, 0x67, 0x45, 0x23, 0xF1])
-
-    for name, inputs in (*BOUNDARY_INPUTS.items(), ("fibonacci_overflow", {"steps": 14})):
-        p, initial, _ = make_benchmark("fibonacci" if name == "fibonacci_overflow" else name, **inputs)
-        data = [0x00] * 16
-        for address, value in initial.items():
-            data[address - DATA_BASE] = value
-        p.write(output / f"{name}.hex", DATA_BASE, data)
-
-    make_backward_branch_limits().write(
-        output / "backward_branch_limits.hex", DATA_BASE, [0x04, 0x00]
-    )
+def generate(output=None):
+    """Export canonical datasets; no program-specific preload/check logic here."""
+    output = Path(output) if output is not None else Path(__file__).resolve().parent
+    for case in load_programs():
+        lines = []
+        for address, data in initial_regions(case):
+            lines.append(f"@{address:04x}")
+            lines.extend(data[offset:offset + 2].hex(" ") for offset in range(0, len(data), 2))
+        (output / f"{case['name']}.hex").write_text("\n".join(lines) + "\n", encoding="ascii")
 
 
 if __name__ == "__main__":
