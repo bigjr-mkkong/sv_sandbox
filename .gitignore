@@ -14,4 +14,5 @@ results.xml
 /dv/cocotb_benches/programs/*.hex
 /dv/cocotb_benches/programs/*.json
 /rtl/architecture.md
+/onboard_fpga_wiring_and_test
 AGENTS.md

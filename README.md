@@ -322,24 +322,35 @@ They perform 8-bit arithmetic modulo 256 in 16-bit variables packed into aligned
 distant branches through intermediate jumps. Post-checks verify all bytes of the
 affected words, including unused bits and preserved inputs.
 
-The Raspberry Pi [run_bench.py](synth/tangnano_9k/program/run_bench.py) uses the
-same JSON preconditions and memory postconditions. It runs every dataset with a
-fresh CPU reset and RAM clear, preloads and verifies code/data, switches the mux,
-waits for HALT, and returns RAM to the Pi to check the results. The hardware
-helpers live in [utils.py](synth/tangnano_9k/program/utils.py), which
-has no main entry point. On a wired Pi with SPI enabled and `python3-spidev` and
-`python3-gpiozero` installed, run from the repository root:
+The Raspberry Pi scripts and their helper tests are maintained separately at
+`vpnadmin@192.168.1.50:/home/vpnadmin/togawa/program/`, outside this repository.
+The remote `hardware_run.py` runs copies of the same JSON datasets.
+Each case holds reset, clears RAM, writes preconditions then program bytes,
+reads both back, releases the FPGA, waits for HALT, and reclaims RAM to check
+postconditions. The modular operations in the remote `utils.py`
+are `fpga_rst_wait(reset_n, mux)`, `fpga_rst_begin(reset_n, mux)`,
+`spi_write(spi, address, byte)`, and `spi_read(spi, address)`.
+Reset hold/release also handle mux ownership; holding reset does not clear RAM.
+On the wired Pi with SPI enabled, `pinctrl`, `python3-spidev`, and
+`python3-gpiozero` installed:
 
 ```sh
-python3 -m synth.tangnano_9k.program.run_bench
+cd /home/vpnadmin/togawa/program
+python3 -u hardware_run.py
 ```
 
-For a standalone Pi copy, place `run_bench.py`, `utils.py`, and the
-`dv/cocotb_benches/programs/` directory tree together, then run `python3 run_bench.py`. Review the GPIO
-assignments, mux polarity and pull resistors documented in the helper first.
+From that directory, `python3 -m unittest test_utils test_run_bench` runs the
+helper tests without accessing GPIO or SPI. After changing repository datasets,
+copy `dv/cocotb_benches/programs/` to the same relative path in the remote directory
+before running hardware tests.
+
+It uses BCM23 reset, BCM24 mux select, BCM22 HALT, and mode-0 SPI at 100 kHz.
+Each run backs up RAM to `ram-before.bin`, clears RAM for every case, saves
+`results.json`, and stops at the first failure. These files are replaced on
+reruns. Cleanup leaves reset asserted and the Pi selected. Review the wiring
+and pull resistors documented in the helper first.
 Hardware PASS means HALT and memory matched; internal RTL checks remain
-simulation-only. The Pi runner has host-only test coverage; physical execution
-has not been validated.
+simulation-only.
 
 The [spi_ram_access](dv/cocotb_benches/programs/spi_ram_access.json) case contains
 only HALT at PC 0. The Pi preloads distinct 16-byte patterns at `0x0200` and
