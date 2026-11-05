@@ -4,16 +4,10 @@ This repository develops an unfinished TOGAWA CPU using a SystemVerilog and
 cocotb template. It includes RTL rendering, unit tests, waveform traces, coverage,
 and optional synthesis and FPGA flows.
 
-# Progress
+## Progress
 It's now passing FPGA prototyping. I tried all test program used in dv/ and the final memory read-out match the defined post-condition:
 
 ![TOGAWA FPGA testbench with a Tang Nano 9K, Raspberry Pi, and breadboard-mounted SPI RAM and bus mux](pictures/IMG_4141.JPG)
-
-`top_module` exposes the integrated CPU's SPI pins and HALT output.
-`main_module` connects the pipeline to IRAM, shares one SPI master through the
-arbiter, and uses the real serial master. Integrated tests run small programs
-against the supplied single-byte SPI RAM model. Component tests cover IRAM and
-the arbiter separately with the ideal-memory model.
 
 ## Installation and prerequisites
 
