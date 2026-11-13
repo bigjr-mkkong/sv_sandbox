@@ -29,6 +29,22 @@ module sram_blk #(
     logic              rsp_is_write_q;
     logic [DATA_W-1:0] mem_rdata;
 
+{% if RENDER_OPTION.SYNTH %}
+    logic [DATA_W-1:0] mem [0:DEPTH-1];
+    logic [ADDR_W-1:0] read_addr_q;
+
+    // RESP accepts no writes, so a held read address keeps response data stable.
+    assign mem_rdata = mem[read_addr_q];
+
+    always_ff @(posedge clk_i) begin
+        if (rst_ni && req_val_i && req_rdy_o) begin
+            if (req_is_write_i)
+                mem[req_addr_i] <= req_data_i;
+            else
+                read_addr_q <= req_addr_i;
+        end
+    end
+{% else %}
     /*
     * Since there will only be a 16x16 dff array
     * It's actually possible to directly synthesize into a dff
@@ -52,6 +68,7 @@ module sram_blk #(
         .data_i  (req_data_i),
         .data_o  (mem_rdata)
     );
+{% endif %}
 
     always_comb begin
         state_d = state_q;

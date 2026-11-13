@@ -28,14 +28,12 @@ module togawa_pipeline (
     logic [15:0] inst_d, inst_q;
 
     logic [15:0] pc_d, pc_q;
-    logic [15:0] branch_pc;
     logic halt_d, halt_q;
     logic stall, flush;
 
     typedef enum logic { IDLE, WAIT } spi_state_t;
     spi_state_t spi_state_d, spi_state_q;
     logic [2:0] byte_d, byte_q;
-    logic [55:0] load_low_d, load_low_q;
 
     // WA operands index eight-byte words; addresses wrap in the 64 KiB SPI space.
     assign load_addr = inst_q[14] ? {reg_q[12:0], 3'b000}
@@ -53,7 +51,8 @@ module togawa_pipeline (
         icache_rdy_o = icache_req_val_o;
 
         if (flush) begin
-            pc_d = branch_pc;
+            // IF already advanced PC past the executing instruction.
+            pc_d = pc_q + { {7{inst_q[8]}}, inst_q[8:0] };
             inst_valid_d = 1'b0;
         end else if (icache_val_i && icache_rdy_o) begin
             pc_d = pc_q + 16'd1;
@@ -80,18 +79,16 @@ module togawa_pipeline (
         reg_dirty_d = reg_dirty_q;
         spi_state_d = spi_state_q;
         byte_d = byte_q;
-        load_low_d = load_low_q;
         halt_d = halt_q;
 
         spi_o.req_val = 1'b0;
         spi_o.req_we = reg_dirty_q;
-        spi_o.req_addr = reg_dirty_q
-            ? {reg_addr_q[15:3], byte_q} : {load_addr[15:3], byte_q};
+        spi_o.req_addr = (!reg_dirty_q && byte_q == 3'd0)
+            ? {load_addr[15:3], byte_q} : {reg_addr_q[15:3], byte_q};
         spi_o.req_wdata = reg_q[byte_q * 8 +: 8];
         spi_o.rsp_rdy = 1'b0;
         stall = 1'b0;
         flush = 1'b0;
-        branch_pc = pc_q;
 
         if (inst_valid_q) begin
             if (inst_q == 16'h0000) begin //If it's HALT
@@ -105,8 +102,6 @@ module togawa_pipeline (
                 reg_dirty_d = 1'b1;
                 // The old bit being one means the toggled bit is zero.
                 flush = reg_q[inst_q[14:9]] && inst_q[8:0] != 9'd0;
-                // IF already advanced PC past the executing instruction.
-                branch_pc = pc_q + { {7{inst_q[8]}}, inst_q[8:0] };
             end
 
             if (stall) begin
@@ -120,17 +115,18 @@ module togawa_pipeline (
                         spi_o.rsp_rdy = 1'b1;
                         if (spi_o.rsp_val) begin
                             spi_state_d = IDLE;
-                            // Keep the indirect pointer intact until all eight bytes arrive.
                             byte_d = byte_q + 3'd1;
-                            if (byte_q != 3'd7) begin
-                                if (!reg_dirty_q)
-                                    load_low_d[byte_q * 8 +: 8] = spi_o.rsp_rdata;
-                            end else if (reg_dirty_q) begin
-                                reg_dirty_d = 1'b0;
-                            end else begin
-                                reg_d = {spi_o.rsp_rdata, load_low_q};
-                                reg_addr_d = load_addr;
-                                stall = 1'b0;
+                            if (!reg_dirty_q) begin
+                                if (byte_q == 3'd0)
+                                    reg_addr_d = load_addr;
+
+                                reg_d[byte_q * 8 +: 8] = spi_o.rsp_rdata;
+                            end
+                            if (byte_q == 3'd7) begin
+                                if (reg_dirty_q)
+                                    reg_dirty_d = 1'b0;
+                                else
+                                    stall = 1'b0;
                             end
                         end
                     end
@@ -146,7 +142,6 @@ module togawa_pipeline (
             reg_dirty_q <= 1'b0;
             spi_state_q <= IDLE;
             byte_q <= 3'd0;
-            load_low_q <= '0;
             halt_q <= 1'b0;
         end else begin
             reg_q <= reg_d;
@@ -154,7 +149,6 @@ module togawa_pipeline (
             reg_dirty_q <= reg_dirty_d;
             spi_state_q <= spi_state_d;
             byte_q <= byte_d;
-            load_low_q <= load_low_d;
             halt_q <= halt_d;
         end
     end

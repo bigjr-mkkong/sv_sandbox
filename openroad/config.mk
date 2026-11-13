@@ -1,4 +1,5 @@
-export PLATFORM = nangate45
+# export PLATFORM = nangate45
+export PLATFORM = sky130
 export DESIGN_NAME = top_module
 export DESIGN_NICKNAME = top_module
 
@@ -15,4 +16,4 @@ export SDC_FILE = $(PROJECT_HOME)/openroad/top_module.sdc
 export CORE_UTILIZATION = 50
 export CORE_ASPECT_RATIO = 1
 export CORE_MARGIN = 2
-export PLACE_DENSITY = 0.60
+export PLACE_DENSITY = 0.80

@@ -447,7 +447,7 @@ working display; tests and coverage generation can run without one.
 Generic synthesis targets the integrated CPU:
 
 ```bash
-make synth                   # Generic Yosys/Slang netlist
+make synth                   # Generic gate-level Verilog netlist
 make check                   # Toolchain, lint, component tests, synthesis
 ```
 

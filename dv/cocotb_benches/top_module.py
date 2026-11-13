@@ -29,7 +29,7 @@ async def check_branch_targets(dut, backward_offsets):
         offset = raw - 0x200 if raw & 0x100 else raw
         base = int(pipeline.pc_q.value)
         target = (base + offset) & 0xFFFF
-        assert int(pipeline.branch_pc.value) == target, (
+        assert int(pipeline.pc_d.value) == target, (
             f"Branch at PC {base - 1:#06x}: offset {offset}, expected {target:#06x}"
         )
         await RisingEdge(dut.clk_i)
@@ -40,7 +40,7 @@ async def check_branch_targets(dut, backward_offsets):
 
 
 async def check_data_transactions(dut, transactions):
-    """Observe data handshakes, held requests, and atomic register commits."""
+    """Check byte loads, stable transfer addresses, and execution stalls."""
     cpu = dut.cpu.main_module_inst
     source = getattr(cpu, "sources[0]")
     pipeline = cpu.pipeline
@@ -63,6 +63,9 @@ async def check_data_transactions(dut, transactions):
         response = bool(source.rsp_val.value and source.rsp_rdy.value)
         previous = int(pipeline.reg_q.value)
         previous_address = int(pipeline.reg_addr_q.value)
+        previous_instruction = (int(pipeline.pc_q.value), int(pipeline.inst_q.value),
+                                int(pipeline.inst_valid_q.value))
+        expected = previous
         byte = int(pipeline.byte_q.value)
         if pending is not None:
             assert not dut.halt_o.value, "HALT before the final byte response"
@@ -71,18 +74,26 @@ async def check_data_transactions(dut, transactions):
             write, address, _ = pending
             assert byte == address % 8
             if not write:
+                data = int(source.rsp_rdata.value)
+                expected = (previous & ~(0xFF << (8 * byte))) | (data << (8 * byte))
                 if byte == 0:
                     loaded = 0
-                loaded |= int(source.rsp_rdata.value) << (8 * byte)
+                loaded |= data << (8 * byte)
         await RisingEdge(dut.clk_i)
         await ReadOnly()
         if pending is not None:
-            if response and not write and byte == 7:
-                assert int(pipeline.reg_q.value) == loaded
+            assert int(pipeline.reg_q.value) == expected, "Unexpected register byte update"
+            if response and not write:
                 assert int(pipeline.reg_addr_q.value) == address & ~7
+                if byte == 7:
+                    assert int(pipeline.reg_q.value) == loaded
             else:
-                assert int(pipeline.reg_q.value) == previous, "Partial load changed the pointer"
                 assert int(pipeline.reg_addr_q.value) == previous_address
+            if not (response and not write and byte == 7):
+                assert (int(pipeline.pc_q.value), int(pipeline.inst_q.value),
+                        int(pipeline.inst_valid_q.value)) == previous_instruction, (
+                    "Execution advanced during an incomplete data transfer"
+                )
             if response:
                 if write:
                     assert bool(pipeline.reg_dirty_q.value) == (byte != 7)
@@ -172,14 +183,16 @@ async def reset_last_byte(dut, write):
     if write:
         assert partial == [0x10, 0x32, 0x55, 0x76, 0x98, 0xBA, 0xDC, 0xFE]
     else:
-        assert int(cpu.pipeline.reg_q.value) == 0
+        assert int(cpu.pipeline.reg_q.value) == int.from_bytes(original[:7] + [0], "little")
+        assert int(cpu.pipeline.reg_addr_q.value) == 0xFFF8
+        assert partial == original
     dut.rst_ni.value = 0
     await ClockCycles(dut.clk_i, 3)
     await Timer(1, unit="ns")
     assert not cpu.pipeline.reg_q.value
+    assert not cpu.pipeline.reg_addr_q.value
     assert not cpu.pipeline.reg_dirty_q.value
     assert not cpu.pipeline.byte_q.value
-    assert not cpu.pipeline.load_low_q.value
     assert not cpu.pipeline.spi_state_q.value
     assert not dut.halt_o.value
     assert dut.spi_cs_n.value

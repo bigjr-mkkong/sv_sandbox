@@ -69,7 +69,7 @@ help:
 	@echo "  make lint                  Lint the rendered RTL with Verilator"
 	@echo "  make test-cocotb           Run the registered top-module unit test"
 	@echo "  make unit-test             Run registered RTL unit tests"
-	@echo "  make synth                 Build a generic Yosys netlist"
+	@echo "  make synth                 Build a generic gate-level Verilog netlist"
 	@echo "  make orfs DEFAULT_GOAL=<choice>  Run optional Docker-backed OpenROAD flow"
 	@echo "                             Choices: synth floorplan place cts route finish all"
 	@echo "                             Configure ORFS_HOME and ORFS_IMAGE; default goal: all"
