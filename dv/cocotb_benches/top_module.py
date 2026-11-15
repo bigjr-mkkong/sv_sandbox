@@ -1,4 +1,4 @@
-"""Integrated CPU programs using the supplied single-byte serial SPI RAM model."""
+"""Integrated CPU programs using the streaming serial SPI RAM model."""
 
 import cocotb
 from cocotb.clock import Clock
@@ -40,12 +40,11 @@ async def check_branch_targets(dut, backward_offsets):
 
 
 async def check_data_transactions(dut, transactions):
-    """Check byte loads, stable transfer addresses, and execution stalls."""
+    """Check whole-word transfers, byte effects, and commit only after completion."""
     cpu = dut.cpu.main_module_inst
     source = getattr(cpu, "sources[0]")
     pipeline = cpu.pipeline
     pending = held = None
-    loaded = 0
     while True:
         await FallingEdge(dut.clk_i)
         await ReadOnly()
@@ -58,46 +57,37 @@ async def check_data_transactions(dut, transactions):
         held = payload if source.req_val.value and not source.req_rdy.value else None
         if source.req_val.value and source.req_rdy.value:
             assert pending is None, "Multiple outstanding data requests"
+            assert not source.req_is_inst.value and payload[1] % 8 == 0
             pending = payload
-            transactions.append((payload[0], payload[1], payload[2] if payload[0] else 0))
+            # Datasets describe byte effects independently of SPI frame grouping.
+            transactions.extend((payload[0], payload[1] + byte,
+                                 (payload[2] >> (8 * byte)) & 0xFF if payload[0] else 0)
+                                for byte in range(8))
         response = bool(source.rsp_val.value and source.rsp_rdy.value)
         previous = int(pipeline.reg_q.value)
         previous_address = int(pipeline.reg_addr_q.value)
         previous_instruction = (int(pipeline.pc_q.value), int(pipeline.inst_q.value),
                                 int(pipeline.inst_valid_q.value))
         expected = previous
-        byte = int(pipeline.byte_q.value)
         if pending is not None:
-            assert not dut.halt_o.value, "HALT before the final byte response"
+            assert not dut.halt_o.value, "HALT before the completed data response"
         if response:
             assert pending is not None, "Unsolicited data response"
             write, address, _ = pending
-            assert byte == address % 8
             if not write:
-                data = int(source.rsp_rdata.value)
-                expected = (previous & ~(0xFF << (8 * byte))) | (data << (8 * byte))
-                if byte == 0:
-                    loaded = 0
-                loaded |= data << (8 * byte)
+                expected = int(source.rsp_rdata.value)
         await RisingEdge(dut.clk_i)
         await ReadOnly()
         if pending is not None:
-            assert int(pipeline.reg_q.value) == expected, "Unexpected register byte update"
-            if response and not write:
-                assert int(pipeline.reg_addr_q.value) == address & ~7
-                if byte == 7:
-                    assert int(pipeline.reg_q.value) == loaded
-            else:
-                assert int(pipeline.reg_addr_q.value) == previous_address
-            if not (response and not write and byte == 7):
+            assert int(pipeline.reg_q.value) == expected, "Register committed before completion"
+            assert int(pipeline.reg_addr_q.value) == (
+                address if response and not write else previous_address)
+            if not (response and not write):
                 assert (int(pipeline.pc_q.value), int(pipeline.inst_q.value),
                         int(pipeline.inst_valid_q.value)) == previous_instruction, (
-                    "Execution advanced during an incomplete data transfer"
-                )
+                    "Execution advanced during an incomplete data transfer")
             if response:
-                if write:
-                    assert bool(pipeline.reg_dirty_q.value) == (byte != 7)
-                assert int(pipeline.byte_q.value) == (byte + 1) % 8
+                assert not pipeline.reg_dirty_q.value
                 pending = None
 
 
@@ -173,18 +163,17 @@ async def reset_last_byte(dut, write):
     dut.rst_ni.value = 1
     while True:
         await FallingEdge(dut.clk_i)
-        if (int(cpu.pipeline.byte_q.value) == 7
-                and bool(cpu.pipeline.reg_dirty_q.value) == write
+        if (bool(cpu.pipeline.reg_dirty_q.value) == write
                 and int(cpu.arbiter.curr_idx_q.value) == 0
-                and not dut.spi_cs_n.value and int(cpu.spi.bit_idx.value) == 8):
+                and not dut.spi_cs_n.value and int(cpu.spi.bit_idx.value) == 80):
             break
     assert not dut.halt_o.value
     partial = read_memory(dut.ram.mem, 0xFFF8, 8)
     if write:
         assert partial == [0x10, 0x32, 0x55, 0x76, 0x98, 0xBA, 0xDC, 0xFE]
     else:
-        assert int(cpu.pipeline.reg_q.value) == int.from_bytes(original[:7] + [0], "little")
-        assert int(cpu.pipeline.reg_addr_q.value) == 0xFFF8
+        assert not cpu.pipeline.reg_q.value
+        assert not cpu.pipeline.reg_addr_q.value
         assert partial == original
     dut.rst_ni.value = 0
     await ClockCycles(dut.clk_i, 3)
@@ -192,7 +181,6 @@ async def reset_last_byte(dut, write):
     assert not cpu.pipeline.reg_q.value
     assert not cpu.pipeline.reg_addr_q.value
     assert not cpu.pipeline.reg_dirty_q.value
-    assert not cpu.pipeline.byte_q.value
     assert not cpu.pipeline.spi_state_q.value
     assert not dut.halt_o.value
     assert dut.spi_cs_n.value
@@ -218,7 +206,6 @@ async def reset_during_last_write_byte(dut):
 async def asynchronous_reset_pulse(dut):
     await prog_exec(dut, PROGRAMS["basic_wa"])
     cpu = dut.cpu.main_module_inst
-    assert cpu.iram.iram_window_valid_q.value
 
     # A pulse entirely between rising edges must still reset every CPU block.
     await FallingEdge(dut.clk_i)
@@ -227,8 +214,6 @@ async def asynchronous_reset_pulse(dut):
     await Timer(1, unit="ns")
     assert not dut.cpu.rst_sync_ni.value
     assert not cpu.pipeline.rst_ni.value
-    assert not cpu.iram.rst_ni.value
-    assert not cpu.iram.sram_blk_inst.rst_ni.value
     assert not cpu.arbiter.rst_ni.value
     assert cpu.spi.rst.value
     dut.rst_ni.value = 1
@@ -242,8 +227,6 @@ async def asynchronous_reset_pulse(dut):
     assert not cpu.pipeline.pc_q.value
     assert not cpu.pipeline.reg_q.value
     assert not dut.halt_o.value
-    assert not cpu.iram.iram_window_valid_q.value
-    assert int(cpu.iram.sram_blk_inst.state_q.value) == 0
     assert int(cpu.arbiter.state_q.value) == 0
     assert int(cpu.spi.state.value) == 0
     assert dut.spi_cs_n.value

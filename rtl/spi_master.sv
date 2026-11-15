@@ -2,10 +2,16 @@
 // spi_master.v
 // Copied from BF CPU
 // Source at: https://github.com/Josephwann/jj-tinytapeout/blob/main/src/spi_master.v
+// Extended locally for 16-bit instruction and 64-bit data bursts.
 // =============================================================================
 
 `default_nettype none
 
+{% do unit_test(
+    module_name = "spi_master",
+    test_framework = "cocotb",
+    use_wrapper = true,
+    test_path = "dv/cocotb_benches/spi_master.py") %}
 module spi_master #(
     parameter CLK_DIV        = 4,
     parameter CS_HIGH_CYCLES = 32
@@ -18,10 +24,12 @@ module spi_master #(
     output wire        req_rdy,
     input  wire        req_we,
     input  wire [15:0] req_addr,
-    input  wire [7:0]  req_wdata,
+    input  wire        req_is_inst,
+    input  wire [63:0] req_wdata,
 
     output reg         resp_val,
-    output reg  [7:0]  resp_rdata,
+    output wire [63:0] resp_rdata,
+    output wire [15:0] resp_rinst,
 
     // ---- SPI pins ----
     output reg         spi_cs_n,
@@ -30,25 +38,26 @@ module spi_master #(
     input  wire        spi_miso
 );
 
-    // ---- spi-ram-emu command bytes ----
+    // ---- 23LC512 command bytes ----
     localparam [7:0] CMD_READ  = 8'h03;
     localparam [7:0] CMD_WRITE = 8'h02;
+    localparam [7:0] CMD_WRMR  = 8'h01;
 
-    // ---- Top-level states ----
-    localparam ST_IDLE = 2'd0;
-    localparam ST_XFER = 2'd1;
-    localparam ST_DONE = 2'd2;
-    localparam ST_WAIT = 2'd3;   // CS-high recovery before the next frame
-    reg [1:0] state;
+    typedef enum logic [2:0] {
+        ST_RESET, ST_SET_MODE, ST_IDLE, ST_XFER, ST_DONE, ST_WAIT
+    } state_t;
+    state_t state;
 
     // ---- CS-high recovery counter ----
     localparam CSW = (CS_HIGH_CYCLES <= 1) ? 1 : $clog2(CS_HIGH_CYCLES);
     reg [CSW-1:0] cs_wait;
 
     // ---- Datapath registers ----
-    reg [31:0] shift_out;
-    reg [7:0]  shift_in;
-    reg [5:0]  bit_idx;
+    reg [23:0] shift_out;
+    reg [63:0] shift_data;
+    reg sampled_miso;
+    reg [6:0] bit_idx;
+    reg is_inst;
 
     // ---- SCLK divider ----
     localparam DIVW = (CLK_DIV <= 2) ? 1 : $clog2(CLK_DIV);
@@ -56,86 +65,113 @@ module spi_master #(
     reg [DIVW-1:0] div_cnt;
     wire half_period_done = (div_cnt == DIV_MAX);
 
-    assign spi_mosi = shift_out[31];
+    assign spi_mosi = bit_idx < 7'd24 ? shift_out[23] : shift_data[63];
+    // Byte-lane wiring converts MSB-first serial bytes to little-endian words.
+    for (genvar i = 0; i < 8; i = i + 1) begin : response_bytes
+        assign resp_rdata[i*8 +: 8] = shift_data[(7-i)*8 +: 8];
+    end
+    assign resp_rinst = {shift_data[7:0], shift_data[15:8]};
 
     assign req_rdy = (state == ST_IDLE);
 
-    always @(posedge clk) begin
+    always @(posedge clk) begin : transfer_registers
         if (rst) begin
-            state      <= ST_IDLE;
-            spi_cs_n   <= 1'b1;
-            spi_sclk   <= 1'b0;
-            resp_val   <= 1'b0;
-            resp_rdata <= 8'h00;
-            shift_out  <= 32'h0;
-            shift_in   <= 8'h0;
-            bit_idx    <= 6'd0;
-            div_cnt    <= {DIVW{1'b0}};
-            cs_wait    <= {CSW{1'b0}};
+            spi_sclk <= 1'b0;
+            shift_out <= 24'd0;
+            shift_data <= 64'd0;
+            sampled_miso <= 1'b0;
+            bit_idx <= 7'd0;
+            div_cnt <= '0;
+            is_inst <= 1'b0;
         end else begin
-            resp_val <= 1'b0;
-
             case (state)
-                // ---------------------------------------------------------
-                ST_IDLE: begin
-                    spi_cs_n <= 1'b1;
+                ST_RESET: begin
+                    shift_out <= {CMD_WRMR, 8'h40, 8'h00};
                     spi_sclk <= 1'b0;
+                    div_cnt <= '0;
+                    bit_idx <= 7'd0;
+                end
+                ST_IDLE: begin
                     if (req_val) begin
-                        shift_out <= req_we ? {CMD_WRITE, req_addr, req_wdata}
-                                            : {CMD_READ,  req_addr, 8'h00};
-                        spi_cs_n  <= 1'b0;   // assert CS, begin the frame
-                        spi_sclk  <= 1'b0;
-                        div_cnt   <= {DIVW{1'b0}};
-                        bit_idx   <= 6'd0;
-                        state     <= ST_XFER;
+                        shift_out <= {req_we ? CMD_WRITE : CMD_READ, req_addr};
+                        for (integer i = 0; i < 8; i = i + 1)
+                            shift_data[(7-i)*8 +: 8] <= req_wdata[i*8 +: 8];
+                        div_cnt <= '0;
+                        bit_idx <= 7'd0;
+                        is_inst <= req_is_inst;
                     end
                 end
-
-                // ---------------------------------------------------------
-                ST_XFER: begin
+                ST_SET_MODE, ST_XFER: begin
                     if (half_period_done) begin
-                        div_cnt  <= {DIVW{1'b0}};
+                        div_cnt <= '0;
                         spi_sclk <= ~spi_sclk;
-
                         if (!spi_sclk) begin
-                            shift_in <= {shift_in[6:0], spi_miso};
+                            sampled_miso <= spi_miso;
                         end else begin
-                            shift_out <= {shift_out[30:0], 1'b0};
-                            bit_idx   <= bit_idx + 6'd1;
-                            if (bit_idx == 6'd31) begin
-                                spi_cs_n <= 1'b1;
-                                state    <= ST_DONE;
-                            end
+                            if (bit_idx < 7'd24)
+                                shift_out <= {shift_out[22:0], 1'b0};
+                            else
+                                shift_data <= {shift_data[62:0], sampled_miso};
+                            bit_idx <= bit_idx + 7'd1;
                         end
                     end else begin
                         div_cnt <= div_cnt + 1'b1;
                     end
                 end
+                default: spi_sclk <= 1'b0;
+            endcase
+        end
+    end
 
-                // ---------------------------------------------------------
-                ST_DONE: begin
-                    resp_val   <= 1'b1;
-                    resp_rdata <= shift_in;
-                    spi_sclk   <= 1'b0;
-                    spi_cs_n   <= 1'b1;                    // keep CS de-asserted
-                    cs_wait    <= CSW'(CS_HIGH_CYCLES - 1);
-                    state      <= ST_WAIT;
+    always @(posedge clk) begin : controller
+        if (rst) begin
+            state <= ST_RESET;
+            spi_cs_n <= 1'b1;
+            resp_val <= 1'b0;
+            cs_wait <= '0;
+        end else begin
+            resp_val <= 1'b0;
+            case (state)
+                // Reset holds pins idle; configure RAM once after reset releases.
+                ST_RESET: begin
+                    spi_cs_n <= 1'b0;
+                    state <= ST_SET_MODE;
                 end
-
-                // ---------------------------------------------------------
-                // Hold CS high long enough for the RP2040 to recover before
-                // the next frame. req_rdy stays low (state != ST_IDLE), so a
-                // pending request is held until recovery completes.
+                ST_SET_MODE: begin
+                    if (half_period_done && spi_sclk && bit_idx == 7'd15) begin
+                        spi_cs_n <= 1'b1;
+                        cs_wait <= CSW'(CS_HIGH_CYCLES - 1);
+                        state <= ST_WAIT;
+                    end
+                end
+                ST_IDLE: begin
+                    if (req_val) begin
+                        spi_cs_n <= 1'b0;
+                        state <= ST_XFER;
+                    end
+                end
+                ST_XFER: begin
+                    if (half_period_done && spi_sclk
+                            && bit_idx == (is_inst ? 7'd39 : 7'd87)) begin
+                        spi_cs_n <= 1'b1;
+                        state <= ST_DONE;
+                    end
+                end
+                ST_DONE: begin
+                    resp_val <= 1'b1;
+                    cs_wait <= CSW'(CS_HIGH_CYCLES - 1);
+                    state <= ST_WAIT;
+                end
                 ST_WAIT: begin
-                    spi_cs_n <= 1'b1;
-                    spi_sclk <= 1'b0;
-                    if (cs_wait == {CSW{1'b0}})
+                    if (cs_wait == '0)
                         state <= ST_IDLE;
                     else
                         cs_wait <= cs_wait - 1'b1;
                 end
-
-                default: state <= ST_IDLE;
+                default: begin
+                    state <= ST_RESET;
+                    spi_cs_n <= 1'b1;
+                end
             endcase
         end
     end
@@ -143,4 +179,3 @@ module spi_master #(
 endmodule
 
 `default_nettype wire
-

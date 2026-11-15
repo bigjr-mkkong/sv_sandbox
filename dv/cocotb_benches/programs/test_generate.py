@@ -5,7 +5,8 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from dv.cocotb_benches.programs.generate import (
-    A, BENCHMARKS, BOUNDARY_INPUTS, Program, make_backward_branch_limits, make_benchmark,
+    A, B, COUNT, TEMP, X, Y, BENCHMARKS, BOUNDARY_INPUTS, Program,
+    make_backward_branch_limits, make_benchmark,
 )
 from dv.cocotb_benches.programs.dataset import DATA_DIR, initial_regions, load_program
 
@@ -124,6 +125,42 @@ class AssemblerTest(unittest.TestCase):
             p.halt()
             self.assertEqual(execute(p, {A: value})[A], value ^ 1)
 
+    def test_signed_shift_preserves_other_bits(self):
+        for address in (A, A + 2, A + 4, A + 6):
+            p = Program()
+            p.shift_right(address, signed=True)
+            p.halt()
+            for value in range(256):
+                initial = {A + offset: 0x5AA5 for offset in range(0, 8, 2)}
+                initial[address] = 0x5A00 | value
+                expected = dict(initial)
+                signed = value if value < 128 else value - 256
+                expected[address] = 0x5A00 | ((signed // 2) & 0xFF)
+                self.assertEqual(execute(p, initial), expected)
+
+    def test_minsky_circle_trajectory(self):
+        # Check every prefix of the default orbit and signed/overflow edge cases.
+        cases = [(64, 0, steps) for steps in range(101)]
+        cases.extend((x, y, steps)
+                     for x, y in ((16, 16), (0, 64), (-64, 0), (0, -64),
+                                  (-1, 1), (127, -128), (-128, 127), (0, 0))
+                     for steps in (0, 1, 2, 25, 100, 255))
+        for x, y, steps in cases:
+            with self.subTest(x=x, y=y, steps=steps):
+                p, initial, _ = make_benchmark(
+                    "minsky_circle", a=x & 0xFF, b=y & 0xFF, steps=steps)
+                memory = execute(p, initial)
+                self.assertEqual((memory[A], memory[B]), (x & 0xFF, y & 0xFF))
+                shifted_x = 0
+                for _ in range(steps):
+                    x = (x - y // 16 + 128) % 256 - 128
+                    shifted_x = x // 16
+                    y = (y + shifted_x + 128) % 256 - 128
+                self.assertEqual((memory[X], memory[Y]), (x & 0xFF, y & 0xFF))
+                self.assertEqual(memory[TEMP], shifted_x & 0xFF)
+                self.assertEqual(memory[COUNT], 0)
+                self.assertTrue(all(0 <= value <= 0xFF for value in memory.values()))
+
     def test_all_register_bits(self):
         for bit in range(64):
             for value in (0, (1 << 64) - 1):
@@ -216,6 +253,8 @@ class AssemblerTest(unittest.TestCase):
     def test_missing_benchmark_inputs(self):
         cases = [(name, {}) for name in BENCHMARKS]
         cases.extend((name, {"a": 255}) for name in ("adder", "gcd", "lfsr"))
+        cases.extend(("minsky_circle", inputs) for inputs in (
+            {"a": 64, "b": 0}, {"a": 64, "steps": 100}, {"b": 0, "steps": 100}))
         for name, inputs in cases:
             with self.subTest(name=name, inputs=inputs), self.assertRaises(ValueError):
                 make_benchmark(name, **inputs)

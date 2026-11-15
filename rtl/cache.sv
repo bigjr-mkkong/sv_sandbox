@@ -151,6 +151,7 @@ module iram_blk #(
     // Convert the word PC to a byte address in the 64 KiB SPI address space.
     assign spi_o.req_addr = 16'({ADDR_W'(req_pc_q + ADDR_W'(addr_ofst_q)), byte_q});
     assign spi_o.req_we = 1'b0;
+    assign spi_o.req_is_inst = 1'b0;
     assign spi_o.req_wdata = '0;
 
     sram_blk #(

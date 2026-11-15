@@ -13,7 +13,7 @@ from pathlib import Path
 from dv.cocotb_benches.programs.dataset import initial_regions, load_programs
 
 
-BENCHMARKS = ("incrementer", "adder", "fibonacci", "gcd", "lfsr")
+BENCHMARKS = ("incrementer", "adder", "fibonacci", "gcd", "lfsr", "minsky_circle")
 BOUNDARY_INPUTS = {
     case["name"]: case["inputs"] for case in load_programs() if case["name"] in BENCHMARKS
 }
@@ -169,7 +169,8 @@ class Program:
             self.mark(next_bit)
         self.jump(equal)
 
-    def shift_right(self, address):
+    def shift_right(self, address, *, signed=False):
+        """Shift the low byte once, retaining its sign bit for signed values."""
         self.select_word(address)
         for bit in range(7):
             self.clear_bit(bit)
@@ -177,7 +178,8 @@ class Program:
             self.branch_zero(bit + 1, done)
             self.toggle(bit)
             self.mark(done)
-        self.clear_bit(7)
+        if not signed:
+            self.clear_bit(7)
 
     def remove_redundant_wa(self):
         """Omit WA only when every incoming path has its window resident."""
@@ -326,7 +328,11 @@ def make_benchmark(name, *, a=None, b=None, steps=None):
     """Build a benchmark with explicit named inputs and 8-bit arithmetic.
 
     Incrementer needs a; adder/GCD need a and b; Fibonacci needs steps;
-    LFSR needs a and steps. Generated program inputs are in BOUNDARY_INPUTS.
+    LFSR needs a and steps. Minsky circle needs a, b and steps, with a/b
+    encoding signed 8-bit x/y in two's complement. It uses epsilon=1/16,
+    arithmetic shifts (rounding down), and wraps each coordinate modulo 256.
+    Final x/y are at X/Y; only the low byte of each 16-bit slot is used.
+    Generated program inputs are in BOUNDARY_INPUTS.
     """
     if name not in BENCHMARKS:
         raise ValueError(f"Unknown benchmark: {name}")
@@ -336,6 +342,7 @@ def make_benchmark(name, *, a=None, b=None, steps=None):
         "fibonacci": (steps,),
         "gcd": (a, b),
         "lfsr": (a, steps),
+        "minsky_circle": (a, b, steps),
     }[name]
     if any(value is None for value in required):
         raise ValueError(f"Explicit inputs are required for {name}")
@@ -393,7 +400,7 @@ def make_benchmark(name, *, a=None, b=None, steps=None):
         p.copy(B, RESULT)
         p.mark(end)
         expected = {A: a, B: b, RESULT: math.gcd(a, b)}
-    else:
+    elif name == "lfsr":
         initial = {A: a, B: steps}
         loop, done = p.label(), p.label()
         p.mark(loop)
@@ -417,6 +424,33 @@ def make_benchmark(name, *, a=None, b=None, steps=None):
         for _ in range(steps):
             value = (value >> 1) ^ (0xB8 if value & 1 else 0)
         expected = {A: value, B: 0}
+    else:
+        # Minsky's sequential recurrence: https://www.inwap.com/pdp10/hbaker/hakmem/hacks.html#item149
+        initial = {A: a, B: b, RESULT: 0, X: a, Y: b, TEMP: 0, COUNT: steps}
+        loop, done = p.label(), p.label()
+        p.mark(loop)
+        p.zero(COUNT, done)
+        p.copy(Y, TEMP)
+        for _ in range(4):
+            p.shift_right(TEMP, signed=True)
+        p.subtract(X, TEMP)
+        p.copy(X, TEMP)  # Y must use the updated X.
+        for _ in range(4):
+            p.shift_right(TEMP, signed=True)
+        p.add(Y, TEMP, RESULT)
+        p.copy(RESULT, Y)
+        p.decrement(COUNT)
+        p.jump(loop)
+        p.mark(done)
+        x, y, shifted_x = a, b, 0
+        for _ in range(steps):
+            signed_y = y if y < 128 else y - 256
+            x = (x - (signed_y >> 4)) & 0xFF
+            signed_x = x if x < 128 else x - 256
+            shifted_x = (signed_x >> 4) & 0xFF
+            y = (y + shifted_x) & 0xFF
+        expected = {A: a, B: b, RESULT: y if steps else 0,
+                    X: x, Y: y, TEMP: shifted_x, COUNT: 0}
     p.remove_redundant_wa()
     p.relax_branches()
     p.halt()

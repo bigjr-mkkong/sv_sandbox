@@ -19,12 +19,13 @@ module iram_blk_unit_test (
     output logic spi_rdy_o,
     output logic spi_val_o
 );
-    spi_ram_if iram_spi();
+    spi_ram_if #(.DATA_W(8)) iram_spi();
 
     assign iram_val_o = iram_spi.req_val;
     assign iram_new_pc_o = iram_spi.req_addr;
     assign iram_spi.req_rdy = spi_rdy_o;
     assign iram_spi.rsp_val = spi_val_o;
+    assign iram_spi.rsp_rinst = 16'd0;
 
     iram_blk iram (
         .clk_i(clk_i),

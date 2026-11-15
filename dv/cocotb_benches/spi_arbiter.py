@@ -10,7 +10,7 @@ from dv.cocotb_benches.clock import tick
 
 def ports(dut):
     names = ("req_val_i", "req_rdy_o", "req_we_i", "req_addr_i", "req_wdata_i",
-             "rsp_val_o", "rsp_rdata_o", "rsp_rdy_i")
+             "rsp_val_o", "rsp_rdata_o", "rsp_rdy_i", "req_is_inst_i", "rsp_rinst_o")
     return [SimpleNamespace(**{name: getattr(dut, f"src{i}_{name}") for name in names})
             for i in range(2)]
 
@@ -18,8 +18,9 @@ def ports(dut):
 async def reset(dut, sources):
     dut.clk_i.value = 0
     dut.rst_ni.value = 0
+    dut.instruction_response_i.value = 0
     for source in sources:
-        for name in ("req_val_i", "req_we_i", "req_addr_i", "req_wdata_i", "rsp_rdy_i"):
+        for name in ("req_val_i", "req_we_i", "req_addr_i", "req_wdata_i", "rsp_rdy_i", "req_is_inst_i"):
             getattr(source, name).value = 0
     await tick(dut)
     for source in sources:
@@ -146,6 +147,7 @@ async def reset_only(dut):
     sources = ports(dut)
     await reset(dut, sources)
     dut.rst_ni.value = 0
+    dut.instruction_response_i.value = 0
     for _ in range(4):
         await tick(dut)
         for source in sources:
@@ -198,3 +200,35 @@ async def simultaneous_requests(dut):
     await accept(dut, sources[1])
     await response(dut, sources, 1, 0)
     await transaction(dut, sources, 0, 0x400, expected=0xA7)
+
+
+@cocotb.test(timeout_time=100, timeout_unit="us")
+async def instruction_response_type_and_backpressure(dut):
+    sources = ports(dut)
+    await reset(dut, sources)
+    for index, expected in enumerate((0xA735, 0x5AC8)):
+        source, other = sources[index], sources[1 - index]
+        dut.instruction_response_i.value = expected
+        source.req_is_inst_i.value = 1
+        request(source, 0x200)
+        await accept(dut, source)
+        source.req_is_inst_i.value = 0
+        for _ in range(12):
+            if source.rsp_val_o.value:
+                break
+            await tick(dut)
+        else:
+            raise AssertionError("Instruction response missing")
+        dut.instruction_response_i.value = expected ^ 0xFFFF
+        request(other, 0x300)
+        for _ in range(5):
+            await tick(dut)
+            assert source.rsp_val_o.value
+            assert int(source.rsp_rinst_o.value) == expected
+            assert not other.rsp_val_o.value and not other.req_rdy_o.value
+        other.req_val_i.value = 0
+        source.rsp_rdy_i.value = 1
+        await tick(dut)
+        source.rsp_rdy_i.value = 0
+        assert not source.rsp_val_o.value
+        await transaction(dut, sources, 1 - index, 0x300, expected=0)
