@@ -1,504 +1,69 @@
-# TOGAWA CPU / SystemVerilog simulation template
+# TOGA-WA CPU
 
-This repository develops an unfinished TOGAWA CPU using a SystemVerilog and
-cocotb template. It includes RTL rendering, unit tests, waveform traces, coverage,
-and optional synthesis and FPGA flows.
+TOGA-WA is a two-stage CPU with 16-bit instructions, one 64-bit working register,
+and a shared 64 KiB external memory for code and data. Its instructions toggle
+bits, branch, and exchange the working register with memory.
 
-## Progress
-It's now passing FPGA prototyping. I tried all test program used in dv/ and the final memory read-out match the defined post-condition:
+## Architecture
 
-![TOGAWA FPGA testbench with a Tang Nano 9K, Raspberry Pi, and breadboard-mounted SPI RAM and bus mux](pictures/IMG_4141.JPG)
+- **Pipeline:** instruction fetch (IF) followed by combined execution and memory
+  access (IDEXMEM).
+- **Working register:** a 64-bit value, its associated memory address, and a dirty
+  flag. WA and HALT write back a dirty register before completing.
+- **Memory:** uncached instruction fetch and data requests share an arbiter and
+  SPI master. Each instruction fetch streams two bytes; each data read or write
+  streams eight bytes. Instructions and data are stored little endian.
+- **Completion:** loads update the register and its address after the full
+  response. HALT stays asserted until reset. Reset clears CPU state, not memory;
+  an interrupted write can leave some bytes changed.
 
-## Installation and prerequisites
+The [pipeline](rtl/togawa.sv), [arbiter](rtl/spi_arbiter.sv), and
+[SPI master](rtl/spi_master.sv) connect in [main_module](rtl/main_module.sv).
 
-The instructions below use Ubuntu 22.04/24.04, either directly or inside WSL 2.
-You need internet access to download the tools, Python packages, and Git
-submodules. Simulation does not require an FPGA, Vivado, or Docker.
+## ISA
 
-### 1. Prepare the operating system
+`R` is the working register. The program counter counts 16-bit instruction words.
 
-On Windows, first install Ubuntu in WSL from an administrator PowerShell:
-
-```powershell
-wsl --install -d Ubuntu
-```
-
-Restart if prompted, launch Ubuntu, and create its Linux user account. Run the
-remaining commands in the Ubuntu terminal. Keep the checkout in your Linux home
-directory, for example `~/projects/`, to avoid building across the Windows
-filesystem. See Microsoft's [WSL installation guide](https://learn.microsoft.com/en-us/windows/wsl/install).
-
-On Ubuntu, install the host tools:
-
-```bash
-sudo apt update
-sudo apt install -y git build-essential perl python3 python3-venv \
-    python3-pip python3-dev ca-certificates curl
-
-python3 --version
-make --version
-g++ --version
-```
-
-The project requires Python **3.10 or later**, GNU Make **4.3 or later**, Bash,
-and a compiler supporting **C++17**. The Ubuntu versions above provide suitable
-host tools. Verilator compiles simulations into native executables, so a C++
-compiler is needed even when you only edit SystemVerilog or Python.
-
-`python3-dev` supplies development files for the distribution's Python.
-cocotb also needs a matching shared `libpython`; this matters if you choose a
-custom Python installation. This project installs its pinned Python dependencies
-into a virtual environment rather than system Python.
-
-### 2. Install OSS CAD Suite
-
-[OSS CAD Suite](https://github.com/YosysHQ/oss-cad-suite-build#installation) is a
-prebuilt collection of HDL tools. Download a dated archive from its
-[releases page](https://github.com/YosysHQ/oss-cad-suite-build/releases); you do
-not need to build Yosys or Verilator from source.
-
-The current development installation reports suite version `20260308`.
-The [2026-03-08 release](https://github.com/YosysHQ/oss-cad-suite-build/releases/tag/2026-03-08)
-is a starting point for matching that environment. If choosing a newer release,
-agree on the same date with your collaborator and rerun the checks below.
-
-Choose the archive matching the machine where the commands will run:
-
-| Machine | Archive platform |
-| --- | --- |
-| Linux or WSL on an Intel/AMD 64-bit machine | `linux-x64` |
-| Linux on a 64-bit ARM machine | `linux-arm64` |
-
-Extract it into a user-owned directory. In this example, replace `YYYYMMDD`
-with the date in your downloaded filename, and adjust the download path or
-platform if necessary:
-
-```bash
-mkdir -p "$HOME/tools"
-tar -xzf "$HOME/Downloads/oss-cad-suite-linux-x64-YYYYMMDD.tgz" \
-    -C "$HOME/tools"
-export OSS_CAD_SUITE="$HOME/tools/oss-cad-suite"
-
-"$OSS_CAD_SUITE/bin/verilator" --version
-"$OSS_CAD_SUITE/bin/yosys" -V
-"$OSS_CAD_SUITE/bin/yosys" -m slang -Q -p 'help read_slang'
-```
-
-The last command checks the Slang plugin used to read this project's
-SystemVerilog. Keep collaborators on the same dated suite release; record the
-archive name when reporting tool-dependent failures.
-
-Repeat the `export OSS_CAD_SUITE=...` command in each new terminal, or add it to
-`~/.bashrc` (or your shell's startup file). Alternatively, pass
-`OSS_CAD_SUITE=/absolute/path/to/oss-cad-suite` to each `make` command. A suite
-installed at `/opt/oss-cad-suite` is detected automatically without an override.
-
-The Makefile adds the selected suite's tools to its own environment. You do not
-need to source the suite's `environment` script or manually activate Python
-before using `make`. If you want to run tools such as GTKWave directly, use:
-
-```bash
-export PATH="$OSS_CAD_SUITE/bin:$PATH"
-```
-
-For other operating systems, follow the suite's upstream installation
-instructions and provide GNU Make and Bash. The commands in this README use the
-Linux workflow; native Windows setup is outside this guide.
-
-### 3. Clone the project and its submodules
-
-Replace `<repository-url>` with the shared repository or your fork's URL:
-
-```bash
-mkdir -p "$HOME/projects"
-cd "$HOME/projects"
-git clone --recurse-submodules <repository-url> sv_sandbox
-cd sv_sandbox
-```
-
-For an existing checkout, initialize any missing submodules:
-
-```bash
-git submodule update --init --recursive
-```
-
-The submodules contain [BaseJump STL](https://github.com/bespoke-silicon-group/basejump_stl)
-and [Taxi](https://github.com/fpganinja/taxi). Keep the revisions recorded by the
-repository; there is no need to update them to their latest upstream versions.
-
-### 4. Install the project's Python packages
-
-From the repository root, select Ubuntu's Python explicitly:
-
-```bash
-make setup VENV_PYTHON=/usr/bin/python3
-venv/bin/python3 --version
-venv/bin/cocotb-config --version
-make doctor
-```
-
-`make setup` creates `venv/` and installs [requirements.txt](requirements.txt),
-including cocotb 2.0.1, Jinja2, and pyserial. Rerun it when those requirements
-change. Without `VENV_PYTHON`, the Makefile prefers a Python selected by pyenv
-and otherwise uses `python3`.
-
-The virtual environment takes precedence over the suite's bundled Python tools.
-Do not replace the pinned cocotb with a different system installation. Upstream
-[cocotb installation documentation](https://docs.cocotb.org/en/v2.0.1/install.html)
-has more information about Python and `libpython` requirements.
-
-`make doctor` should print `Toolchain and submodules are ready.` It checks the
-simulator, Python dependencies, Yosys/Slang, and iCE40 tools. Coverage also uses
-`verilator_coverage`, supplied by OSS CAD Suite.
-
-### 5. Run the first checks
-
-Keep `RENDER_OPTION.SYNTH` set to `false` in [rtl/config.json](rtl/config.json),
-then run:
-
-```bash
-make lint
-make unit-test
-```
-
-- `make lint` renders and lints the current top-level source set.
-- `make unit-test` runs the registered IRAM, SPI-arbiter, and integrated CPU tests, then
-  generates annotated Verilator coverage.
-
-The serial model checks functional byte transfers, without validating real
-memory timing or sequential bursts. Running `make` with no target prints help.
-
-### Troubleshooting setup
-
-| Symptom | What to check |
-| --- | --- |
-| `verilator` or `yosys` not found | Verify `OSS_CAD_SUITE` names the extracted directory containing `bin/`, not the archive or its parent. Run `make doctor` again. |
-| `read_slang` or Slang plugin unavailable | Select a suite containing the Slang plugin; a separate system Yosys installation may not include it. |
-| `venv` creation fails or `ensurepip` is missing | Install `python3-venv` matching the selected Python. |
-| Missing `jinja2`, `serial`, or `cocotb-config` | Run `make setup` from the repository root and use its `venv/`. |
-| cocotb cannot locate `libpython` | Use `/usr/bin/python3` with its matching development package. For pyenv/custom Python, provide a shared-library build; create a fresh venv from that interpreter. |
-| Missing Taxi or BSG source files | Run `git submodule update --init --recursive`. |
-| GNU Make reports grouped-target syntax errors | Check `make --version`; this Makefile requires GNU Make 4.3+. |
-| Simulation reports `SYNTH ON` | Set `RENDER_OPTION.SYNTH=false` before cocotb tests. |
-| Old build errors after changing toolchain | Run `make clean`, then repeat setup checks and rebuild. `make clean` removes generated results, coverage, and traces. |
-
-## Current CPU project
-
-TOGAWA uses 16-bit instructions and a 64-bit working register, with two stages,
-IF and IDEXMEM. TOGA toggles a
-working-register bit and conditionally branches. WA writes back a dirty working
-word and loads another word; HALT completes pending write-back before stopping.
-The implementation and integration are still in progress.
-
-| Component | Source | Current role |
+| Instruction | 16-bit encoding | Operation |
 | --- | --- | --- |
-| CPU pipeline | [rtl/togawa.sv](rtl/togawa.sv) | Executes TOGA, WA, and HALT; data words use byte SPI transactions. |
-| SRAM and instruction buffer | [rtl/cache.sv](rtl/cache.sv) | Holds a 16-instruction window and refills it with byte requests. |
-| SPI arbiter | [rtl/spi_arbiter.sv](rtl/spi_arbiter.sv) | Shares a downstream memory between two requesters and buffers response pulses. |
-| SPI master | [rtl/spi_master.sv](rtl/spi_master.sv) | Real serial-transfer module used by integrated CPU tests. |
-| Interfaces and static settings | [rtl/config_pkg.sv](rtl/config_pkg.sv) | Defines the SPI interface, data width, and project clock. |
-| Integrated CPU | [rtl/top_module.sv](rtl/top_module.sv), [rtl/main_module.sv](rtl/main_module.sv) | Connects pipeline instruction requests to IRAM; pipeline data and IRAM refills share the arbiter and real SPI master. |
+| TOGA | `0`, bit index `[14:9]`, signed offset `[8:0]` | Toggle `R[bit]`; if it becomes zero, branch relative to the following instruction. |
+| WA-direct | `10`, word index `[13:0]` | Write back dirty `R`, then load eight bytes from `index << 3`. |
+| WA-indirect | `11`, ignored `[13:0]` | Write back dirty `R`, then load eight bytes from the old value of `R << 3`. Canonical encoding: `0xC000`. |
+| HALT | `0x0000` | Complete dirty writeback and stop. |
 
-The pipeline transfers 64-bit data words as eight little-endian SPI byte
-transactions. IRAM and the arbiter retain their component verification
-wrappers. Integrated tests connect the real master to
-[spi_ram_model.sv](dv/cocotb_wrappers/spi_ram_model.sv). Its source and limitations
-are recorded in the model: single-byte transfers only, intended for functional
-pipeline verification rather than physical SPI memory timing.
+TOGA selects bits 0–63 and branches by −256 to +255 instructions. `0x0000` is
+reserved for HALT, so TOGA bit 0 with offset 0 cannot be encoded.
 
-| Instruction | Encoding | Operation |
+SPI byte addresses wrap at 16 bits. Instruction fetch uses `(PC << 1) & 0xFFFF`;
+WA uses `(index << 3) & 0xFFFF`, so data words are eight-byte aligned and only the
+low 13 index bits affect the address. Reset initializes `PC`, `R`, and the
+associated data address to zero.
+
+## Results
+
+The [program datasets](dv/cocotb_benches/programs/) use the
+[TOGAWA assembler](dv/cocotb_benches/programs/generate.py). These benchmarks use
+8-bit arithmetic modulo 256; Minsky interprets coordinate bytes as signed values
+and uses a step factor of 1/16.
+
+| Program | Input | Result |
 | --- | --- | --- |
-| TOGA | `0`, bit index `[14:9]`, signed displacement `[8:0]` | Toggle bit 0..63; branch relative to the next word PC if the bit becomes zero. |
-| WA-direct | `10`, word index `[13:0]` | Write back dirty data, then load from `index << 3`. |
-| WA-indirect | `11`, unused `[13:0]` | Write back dirty data, then load from the old working-register value shifted left by three. |
-| HALT | `0x0000` | Discard later instructions, finish dirty writeback, then hold HALT high until reset. |
+| Incrementer | 255 + 1 | 0 |
+| Adder | 127 + 129 | 0 |
+| Fibonacci | F(13) | 233 |
+| Fibonacci overflow | F(14) | 121 |
+| GCD | 255, 251 | 1 |
+| LFSR | Seed 255, 255 steps, mask `0xB8` | 255 |
+| Minsky circle | Start `(64, 0)`, 100 steps | `(63, -4)` |
 
-Addresses wrap to the 16-bit SPI bus: only the low 13 index bits address memory.
-`Program.wa(address)` takes an eight-byte-aligned byte address in `0..0xFFF8`;
-`Program.wa_indirect()` emits `0xC000`. Loads commit the register and its address
-only after the eighth response. Memory writes commit one byte at a time.
-This ISA is incompatible with the old 16-bit-register images; regenerate programs.
+Recorded validation on **2026-11-15**:
 
-## Development and verification
+- **RTL simulation at 50 MHz:** 21/21 integrated cases passed, covering all 17
+  programs, memory access, interrupted transfers, and asynchronous reset.
+- **FPGA execution:** 17/17 programs reached HALT and matched their expected
+  memory contents, including Minsky circle.
 
-Run commands from the repository root:
+![TOGAWA FPGA test setup](pictures/IMG_4141.JPG)
 
-```bash
-make prepare             # Render RTL and generate the unit-test manifest
-make lint                # Lint the default top-level design
-make test-cocotb          # Run the registered integrated CPU tests
-make unit-test           # Run all registered module tests and generate coverage
-make help                # List available targets
-```
-
-`make lint` uses the default top's canonical source list; it does not replace
-running the CPU-component tests. Individual unit-test DUTs and their dependencies
-are compiled by `make unit-test`.
-
-`make test-cocotb` delegates to `make unit-test UNIT_TEST_MODULE=top_module`.
-The top is registered like every other unit-test module, using
-`dv/cocotb_wrappers/top_module.sv` and `dv/cocotb_benches/top_module.py`.
-`UNIT_TEST_MODULE=<name>` selects any one registered module; omitting it runs
-all modules. An unknown module name is an error.
-
-### Test registration and models
-
-RTL templates register cocotb tests through Jinja's `do` extension:
-
-```jinja
-{% do unit_test(
-    module_name = "iram_blk",
-    test_framework = "cocotb",
-    test_path = "dv/cocotb_benches/iram_tb.py",
-    use_wrapper = true) %}
-```
-
-`make prepare` writes these registrations to `build/.unit-test.json` without
-executing tests. [misc/unit-test.py](misc/unit-test.py) runs each registered
-module in a separate simulation and stops on the first failure.
-
-With `use_wrapper=true`, the top must be `<module_name>_unit_test`. The runner
-compiles the files under `dv/cocotb_wrappers/`, including shared simulation
-models; it selects only the registered DUT for that run. Optional
-`rtl_dependencies=["helper.sv"]` entries add rendered RTL dependencies.
-
-The component tests use [cpp/ideal_mem.cpp](cpp/ideal_mem.cpp) through DPI.
-The shared [ideal SPI RAM](dv/cocotb_wrappers/ideal_spi_ram.sv) uses an 8-bit
-memory handle. IRAM and arbiter tests exercise byte transactions through this
-model without serial SPI timing. C++ sources under `cpp/` are automatically
-included in the cocotb/Verilator build.
-
-The integrated wrapper exposes the serial RAM's byte array as `dut.ram.mem`.
-[simp_spi_ram_helper.py](dv/cocotb_benches/simp_spi_ram_helper.py) provides generic
-byte-range helpers:
-
-```python
-await write_memory(dut.ram.mem, address, [0xAA, 0xBB, 0xCC])
-assert read_memory(dut.ram.mem, address, 3) == [0xAA, 0xBB, 0xCC]
-```
-
-The interface accepts and returns lists of byte values; byte conversion and
-validation happen inside the helper. Addresses are byte addresses and the
-entire range is checked before access.
-`write_memory` waits for cocotb's scheduled writes to commit. Hold the CPU in
-reset while preloading; inspect results after HALT. Pack
-16-bit instructions/variables into little-endian byte lists with
-`[word & 0xFF, word >> 8]`; use `list(value.to_bytes(8, "little"))` for a
-complete 64-bit register value.
-Each top-level test clears RAM explicitly;
-the serial model has no reset input, so CPU reset alone preserves its memory.
-
-The basic programs, gem5 benchmarks, and branch-limit programs are defined in
-the checked-in [programs/](dv/cocotb_benches/programs/) JSON datasets. Each file contains `code`
-(four-digit hex instruction words), `precondition.memory` (initial byte ranges),
-and `postcondition` (HALT and expected memory ranges). RAM starts zeroed; code
-is placed at byte address zero in little-endian order. See
-[basic_wa.json](dv/cocotb_benches/programs/basic_wa.json) for a small example.
-
-The top-level bench automatically discovers the JSON files and uses the shared
-[dataset loader](dv/cocotb_benches/programs/dataset.py). It does not require generated `.hex`
-files. Run the checks with:
-
-```sh
-python3 -m unittest dv.cocotb_benches.programs.test_dataset dv.cocotb_benches.programs.test_generate
-make test-cocotb
-```
-
-For tools that need readmemh text, export the same datasets with
-`python3 -m dv.cocotb_benches.programs.generate`. These ignored `.hex`
-files are written beside the datasets and use `@` byte addresses and little-endian bytes.
-The [assembler and benchmark builders](dv/cocotb_benches/programs/generate.py)
-live in the same directory and support constructing custom programs.
-The bench loads each dataset, waits for HALT, and compares its postconditions.
-The optional `simulation` section retains internal PC/register expectations,
-branch requirements, and exact data transactions. These are checked only in RTL.
-The benchmark data starts at byte address `0x4000`, separate from instructions.
-The datasets' `inputs` fields define the benchmark inputs below;
-`BOUNDARY_INPUTS` in the generator reads those fields.
-`make_benchmark` requires explicit named inputs; it has no sample input defaults.
-They perform 8-bit arithmetic modulo 256 in 16-bit variables packed into aligned
-64-bit words. The benchmark builder removes redundant WA instructions and routes
-distant branches through intermediate jumps. Post-checks verify all bytes of the
-affected words, including unused bits and preserved inputs.
-
-The Raspberry Pi scripts and their helper tests are maintained separately at
-`vpnadmin@192.168.1.50:/home/vpnadmin/togawa/program/`, outside this repository.
-The remote `hardware_run.py` runs copies of the same JSON datasets.
-Each case holds reset, clears RAM, writes preconditions then program bytes,
-reads both back, releases the FPGA, waits for HALT, and reclaims RAM to check
-postconditions. The modular operations in the remote `utils.py`
-are `fpga_rst_wait(reset_n, mux)`, `fpga_rst_begin(reset_n, mux)`,
-`spi_write(spi, address, byte)`, and `spi_read(spi, address)`.
-Reset hold/release also handle mux ownership; holding reset does not clear RAM.
-On the wired Pi with SPI enabled, `pinctrl`, `python3-spidev`, and
-`python3-gpiozero` installed:
-
-```sh
-cd /home/vpnadmin/togawa/program
-python3 -u hardware_run.py
-```
-
-From that directory, `python3 -m unittest test_utils test_run_bench` runs the
-helper tests without accessing GPIO or SPI. After changing repository datasets,
-copy `dv/cocotb_benches/programs/` to the same relative path in the remote directory
-before running hardware tests.
-
-It uses BCM23 reset, BCM24 mux select, BCM22 HALT, and mode-0 SPI at 100 kHz.
-Each run backs up RAM to `ram-before.bin`, clears RAM for every case, saves
-`results.json`, and stops at the first failure. These files are replaced on
-reruns. Cleanup leaves reset asserted and the Pi selected. Review the wiring
-and pull resistors documented in the helper first.
-Hardware PASS means HALT and memory matched; internal RTL checks remain
-simulation-only.
-
-The [spi_ram_access](dv/cocotb_benches/programs/spi_ram_access.json) case contains
-only HALT at PC 0. The Pi preloads distinct 16-byte patterns at `0x0200` and
-`0xFFF0`, starts the FPGA, then reads both patterns back after HALT. The CPU
-fetches the HALT instruction but performs no data loads or stores; the RTL
-test also checks that its data-transaction trace is empty. This case exercises
-Pi RAM access and mux handoff without CPU computation changing the test data.
-
-| Benchmark | Boundary calculation | Result |
-| --- | --- | --- |
-| Incrementer | 255 + 1 | 0 (overflow) |
-| Adder | 127 + 129 = 256 | 0 (overflow) |
-| Fibonacci | F(13), the last term that fits in a byte | 233 |
-| Fibonacci overflow | F(14) = 377 | 121 (modulo 256) |
-| GCD | gcd(255, 251), with prime 251 | 1 |
-| LFSR | Seed 255, 255 steps; polynomial mask `0xB8` | 255 |
-
-GCD uses 255 as the maximum one-byte input; 256 needs nine bits. A passive
-monitor checks the sign-extended 9-bit displacement and the registered PC
-for every taken branch. Loop benchmarks must take backward branches. A
-separate guarded program verifies taken offsets `-1` and `-256` explicitly;
-the upper-address WA test also takes a `+255` branch using register bit 63.
-
-The 41 registered cases cover:
-
-- IRAM reset, fills, 16- and 64-instruction streams, jumps, boundaries,
-  wraparound, response backpressure, and redirects during refill.
-- Arbiter reset, individual and overlapping requests, simultaneous contention,
-  response buffering, shared memory, and reset cancellation.
-- Integrated memory access and bounds, HALT-only SPI RAM preload/readback,
-  basic WA, and TOGA with and without a
-  taken branch, including serial write-back and the final PC.
-- TOGA followed by HALT, dirty-word completion before HALT, suppression of
-  following instructions, and stable halted state with no further fetch or data traffic.
-- Eight-byte transfers, indirect pointer chains and self-reference, address
-  truncation, upper address/bit boundaries, stable stalled requests, and reset
-  during the final load or write byte, plus the shared asynchronous reset path.
-- Incrementer, adder, Fibonacci, GCD, and LFSR programs executing through
-  IRAM refills, the arbiter, and the real serial SPI master, including byte
-  overflow and the backward-branch displacement limits.
-
-### Results, waveforms, and coverage
-
-Each module's output lives under `build/unit-test/<module>/`:
-
-| File | Contents |
-| --- | --- |
-| `results.xml` | cocotb test results |
-| `dump.vcd` | Waveform trace |
-| `coverage.dat` | That module's Verilator coverage |
-
-After a successful full run, open `build/unit-test/coverage/index.md` for links
-to every annotated source. The raw combined data is
-`build/unit-test/coverage/merged.dat`. For example, annotated IRAM/SRAM RTL is:
-
-```text
-build/unit-test/coverage/annotated/build/rtl/cache.sv
-```
-
-Annotations include line, branch, expression, and toggle coverage. `%000000`
-marks an uncovered source line, `-000000` marks an uncovered individual point,
-and `~` indicates partial coverage. Evaluate gaps against the module's contract;
-coverage alone does not establish correct behavior.
-
-For waveform inspection, launch the suite's GTKWave from the same terminal:
-
-```bash
-"$OSS_CAD_SUITE/bin/gtkwave" build/unit-test/iram_blk/dump.vcd
-```
-
-If using the default `/opt/oss-cad-suite` installation without the environment
-variable, substitute that directory in the command. A graphical viewer needs a
-working display; tests and coverage generation can run without one.
-
-## Editing RTL and collaborating
-
-- Edit source files under `rtl/`; generated copies under `build/rtl/` are
-  replaced by the renderer. Jinja template syntax is resolved before HDL tools
-  read the files, so use the Make targets rather than compiling templates directly.
-- [rtl/rtl.flist](rtl/rtl.flist) is the canonical source manifest for the default
-  design. Add sources needed by that design there, keeping interfaces/packages
-  ahead of their users. Module-level tests may register additional dependencies.
-- [rtl/config_pkg.sv](rtl/config_pkg.sv) defines the SPI interface and static
-  settings. [rtl/config.json](rtl/config.json) selects rendering options.
-- After pulling changes, run `git submodule update --init --recursive` and
-  rerun `make setup` if `requirements.txt` changed. Run relevant unit tests before
-  sharing an RTL change; include the suite release and failing test name when
-  reporting a problem.
-- Share source changes and dependency revisions. Generated files under `build/`
-  are ignored. Local development notes in `AGENTS.md` are also ignored and are
-  not distributed with a normal clone.
-
-## Optional synthesis and hardware flows
-
-Generic synthesis targets the integrated CPU:
-
-```bash
-make synth                   # Generic gate-level Verilog netlist
-make check                   # Toolchain, lint, component tests, synthesis
-```
-
-The existing iCEBreaker and Basys 3 board wrappers and constraints still use the
-retired UART pin interface. Their optional build/programming targets need a
-separate migration to selected SPI pins before use. Board programming and
-integrated hardware execution have not been validated.
-
-### OpenROAD
-
-Install Docker, obtain an ORFS image, and clone
-[OpenROAD-flow-scripts](https://github.com/The-OpenROAD-Project/OpenROAD-flow-scripts)
-separately. Set `ORFS_HOME` to that checkout, which must contain
-`flow/util/docker_shell`. Defaults are the sibling `../OpenROAD-flow-scripts`
-and image `openroad/orfs:latest`; use a fixed image tag for reproducible work.
-
-Set `RENDER_OPTION.SYNTH=true` in `rtl/config.json`, then run:
-
-```bash
-make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
-    ORFS_IMAGE=openroad/orfs:latest DEFAULT_GOAL=floorplan
-
-make orfs ORFS_HOME=/path/to/OpenROAD-flow-scripts \
-    ORFS_IMAGE=openroad/orfs:latest DEFAULT_GOAL=all
-```
-
-Stopping goals include `synth`, `floorplan`, `place`, `cts`, `route`, `finish`,
-and `all`. The flow uses Nangate45 and the constraints in
-`openroad/top_module.sdc`. Logs, reports, and implementation results live under
-`openroad/output/`. Reporting defaults to `QT_QPA_PLATFORM=offscreen` for use
-over SSH; interactive GUI targets require a working display and
-`QT_QPA_PLATFORM=xcb`.
-
-Restore `RENDER_OPTION.SYNTH=false` before cocotb tests. OpenROAD is not part of
-`make check`.
-
-## Repository layout
-
-| Path | Purpose |
-| --- | --- |
-| `rtl/` | Integrated CPU, components, configuration, and source manifest |
-| `dv/cocotb_benches/` | Python verification suites and helpers |
-| `dv/cocotb_wrappers/` | Unit-test tops and shared ideal SPI RAM |
-| `dv/` | Component cocotb tests and simulation wrappers |
-| `cpp/` | DPI ideal-memory implementation |
-| `misc/` | RTL renderer and unit-test runner |
-| `lint/` | Verilator lint configuration |
-| `third_party/` | BaseJump STL and Taxi submodules |
-| `synth/` | Generic Yosys and FPGA flows |
-| `openroad/` | Optional ORFS configuration and timing constraints |
-| `build/` | Generated RTL, simulations, traces, and coverage |
-
-`make clean` removes generated builds, traces, coverage, OpenROAD output, and
-Vivado build output. It preserves source files and `venv/`.
+FPGA checks cover HALT and external memory results; internal register and branch
+checks are performed in simulation.
