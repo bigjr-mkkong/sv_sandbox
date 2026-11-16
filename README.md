@@ -56,7 +56,7 @@ and uses a step factor of 1/16.
 | LFSR | Seed 255, 255 steps, mask `0xB8` | 255 |
 | Minsky circle | Start `(64, 0)`, 100 steps | `(63, -4)` |
 
-Recorded validation on **2026-11-15**:
+## Progress:
 
 - **RTL simulation at 50 MHz:** 21/21 integrated cases passed, covering all 17
   programs, memory access, interrupted transfers, and asynchronous reset.
@@ -67,3 +67,7 @@ Recorded validation on **2026-11-15**:
 
 FPGA checks cover HALT and external memory results; internal register and branch
 checks are performed in simulation.
+
+- **GF180 Tapeout:** I am aiming for GF180 tapeout service provided by tiny tapeout,
+   and the deadline for design submission is Dec this year, while the actual chips 
+      will arrive in May next year(2027)
